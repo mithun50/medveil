@@ -57,7 +57,7 @@ Development:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                                             # 214 tests
+python -m pytest -q                                             # 255 tests
 python tools/ci_gate.py --input ../Secret-Wards-ToolKit/dev/input --truth ../Secret-Wards-ToolKit/dev/truth/truth.json
 python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 7
 python tools/adversarial_gen.py --kit ../Secret-Wards-ToolKit --out adv --seed 3
@@ -125,8 +125,12 @@ Runs per slot on a normalized view: NFKC, zero-width, bidi and other invisible c
 removed, Cyrillic and Greek homoglyphs folded, Latin diacritics stripped, every Unicode dash
 to `-`, Indic, Arabic-Indic and full-width digits to ASCII, `\uXXXX`, HTML entities,
 %-encoding and base64 decoded. The scorer normalizes the same way, so a disguised name cannot
-slip through. Text longer than 32 KB is detected in chunks of about 4 KB, cut at whitespace
-(identical chunks are detected once), so cost stays linear on degenerate input.
+slip through. Text longer than 32 KB is detected in chunks of about 4 KB, cut at whitespace.
+Each chunk is detected together with the first 256 characters of the next one, so a name or a
+spaced phone number cut by the boundary is still found whole, and identical chunks are detected
+once. A run with no whitespace at all (a base64 blob) is never cut, so it can still be decoded;
+there the cost depends on the patterns staying linear on that run, which the 2 MB probes below
+check.
 
 1. **Protect layer** first: doctors (`Dr. ...`, doctor fields, FHIR Practitioner), drugs and
    doses (`Dolo 650`, `5 mg`), frequencies (`1-0-1`, `BD x 5 days`), vitals, labs with units,
@@ -226,7 +230,9 @@ An evaluator can try to slip PII past the detectors with small edits, hide it in
 or feed files built to crash or stall the pipeline. `tools/adversarial_gen.py` builds such a
 set from the practice data (seed 3: 163 files with 1,043 tweaked mentions, 10 wrapped files,
 27 hostile files) and its `--verify` mode scans the output with the scorer's normalization
-plus payload decoding. It exits 1 on any leak, raw copy or canary; CI runs it on every push.
+plus payload decoding. It exits 1 on any leak, canary, raw copy of a PII file, hostile file
+handled against its declared expectation, or PII from the symlink target found in the release.
+CI runs it on every pull request and every push to `main`.
 
 | Tweak | Example | Mentions in seed 3 |
 |---|---|---:|
@@ -247,12 +253,12 @@ Result: 0 of 3,245 PII mentions and 0 of 8 canaries survive.
 | XML "billion laughs", text that starts with a tag | quarantined (`unsupported_markup`), never parsed |
 | JSON list nested 10,000 deep | quarantined (`too_deep`) by a linear pre-scan, no recursion |
 | JSON with `NaN` or `Infinity` | quarantined (`malformed_json`) |
-| symlink pointing outside the input | quarantined (`symlink`), not followed or copied |
+| symlink pointing outside the input | quarantined (`symlink`): never parsed, copied or stored; a regular target is read only to hash it |
 | CSV formula injection, duplicate JSON keys, a 100,000-key object, UTF-16 without BOM, mixed encodings, a bidi file name | sanitized normally |
-| notes of up to 2 MB made of one repeated character, label, title word, base64 or hex alphabet | sanitized; each takes at most 5.1 s on its own, startup included |
+| notes of up to 2 MB made of one repeated character, label, title word, base64 or hex alphabet | sanitized; each takes at most 5.4 s on its own, startup included |
 
-The whole adversarial set (227 files) runs in 42 s with a 345 MB peak, down from 158 s and
-616 MB before chunked detection.
+The whole adversarial set (227 files) runs in 33 s with a 344 MB peak on a laptop, down from
+158 s and 616 MB before chunked detection.
 
 ## Privacy and utility trade-off (measured on the practice data)
 

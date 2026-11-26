@@ -44,8 +44,8 @@ registration row was read first.</p>
 <h2>2. How each part works</h2>
 <ul>
 <li><b>Ingestion.</b> Format by content, not extension. UTF-8, UTF-16, cp1252; mojibake, binary (archives,
-executables, SQLite...), markup, empty, truncated, over-deep (linear scan) or <code>NaN</code> JSON, JSON behind
-<code>.csv</code>, symlinks and special files are quarantined with a reason code, never followed or unpacked. Every cell, leaf, key, header, file name and note becomes a slot.</li>
+executables, SQLite...), markup, empty, truncated, over-deep (linear scan) or <code>NaN</code>/<code>Infinity</code> JSON,
+JSON behind <code>.csv</code>, symlinks and special files are quarantined with a reason code, never parsed or unpacked. Every cell, leaf, key, header, file name and note becomes a slot.</li>
 <li><b>Detection.</b> On a normalized view (NFKC; zero-width and bidi marks removed; homoglyphs, diacritics,
 Unicode dashes, Indic, Arabic and full-width digits folded; <code>\u</code>, entities, %-encoding decoded), in
 linear time on degenerate text. A <i>protect layer</i> runs first: <code>Dr.</code> names, doses (<code>Dolo 650</code>,
@@ -112,8 +112,8 @@ research needs it, and give it up only where the class is rare; "state for every
 diagnoses stay exact: they are scored meaning-trap values. The remaining risk is the targeted attack: a
 patient whose condition is shared by few people of the same gender and band can still be singled out.
 Direct exposure (A1) and pseudonym inversion (A6) are 0%; across two releases no pseudonym and 4.3% of dates stay the same (A7).</p>
-<p><b>Speed.</b> Practice data: 2.2 s and 55 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
-41 s and 216 MB on a laptop; the 227-file adversarial set: 42 s and 345 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
+<p><b>Speed.</b> Practice data: 2.2 s and 50 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
+41 s and 216 MB on a laptop; the 227-file adversarial set: 33 s and 344 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
 
 <h2>5. Security design (assume the server is breached)</h2>
 <div class="two"><div><ul>
