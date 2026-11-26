@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from .detect.dates import DateHit, render
+from .detect.dates import DateHit, find_dates, render
 from .detect.engine import name_tokens
 from .link import _ident
 from .lexicon import district_of
@@ -21,7 +21,7 @@ PLACEHOLDER = {
     "PHONE": "[PHONE]", "AADHAAR": "[AADHAAR]", "AADHAAR_MASKED": "[AADHAAR]", "ABHA": "[ABHA]",
     "ABHA_ADDR": "[ABHA-ADDRESS]", "EMAIL": "[EMAIL]", "PAN": "[PAN]", "INSURANCE": "[INSURANCE-ID]",
     "HOUSE": "[HOUSE]", "LOCALITY": "[LOCALITY]", "LANDMARK": "[LANDMARK]", "VILLAGE": "[VILLAGE]",
-    "TEHSIL": "[TEHSIL]", "PIN": "[PIN]", "DOB": "[DOB]", "ADDRESS": "[ADDRESS]",
+    "TEHSIL": "[TEHSIL]", "PIN": "[PIN]", "DOB": "[DOB]", "ADDRESS": "[ADDRESS]", "ENCODED": "[ENCODED-PII-REMOVED]",
 }
 
 
@@ -37,6 +37,8 @@ class Ctx:
     rel_tokens: list = field(default_factory=list)
     mrn_psn: dict = field(default_factory=dict)
     pin_digits: int = 3
+    dob_mode: str = "suppress"
+    date_order: str = "dmy"
 
 
 def _role_of_mention(value: str, ctx: Ctx) -> str:
@@ -70,6 +72,10 @@ def replacement(sp: Span, sl: Slot, ctx: Ctx, structured: bool) -> str:
     if t == "DATE":
         h: DateHit = sp.value
         return render(h, shift_date(h.date, ctx.shift))
+    if t == "DOB" and not structured and ctx.dob_mode == "shift":
+        if isinstance(sp.value, DateHit):
+            return render(sp.value, shift_date(sp.value.date, ctx.shift))
+        return "[DOB]"
     if t == "AGE":
         label = band_label(ctx.band, ctx.top) if ctx.band and ctx.band[0] <= int(sp.value) <= ctx.band[1] else None
         if label is None:
@@ -78,6 +84,12 @@ def replacement(sp: Span, sl: Slot, ctx: Ctx, structured: bool) -> str:
         return label
     if structured:
         if t == "DOB":
+            if ctx.dob_mode == "shift":
+                hits = find_dates(sl.text[sp.start:sp.end], ctx.date_order)
+                if hits:
+                    h = hits[0]
+                    return sl.text[sp.start:sp.start + h.start] + render(h, shift_date(h.date, ctx.shift)) + \
+                        sl.text[sp.start + h.end:sp.end]
             return ""
         if t in ("VILLAGE", "TEHSIL"):
             return ctx.district or PLACEHOLDER[t]
@@ -195,7 +207,7 @@ def serialize(doc: Doc) -> str:
                 if sl.out is not None:
                     keys[sl.path] = sl.out
             else:
-                if doc.fmt == "fhir" and sl.ftype == "DOB" and sl.out is not None:
+                if doc.fmt == "fhir" and sl.ftype == "DOB" and sl.out == "":
                     drop.add(sl.path)
                     continue
                 leaf[sl.path] = final_value(sl)

@@ -8,13 +8,13 @@ from typing import Any
 PII_TYPES = {
     "NAME", "PHONE", "AADHAAR", "AADHAAR_MASKED", "ABHA", "ABHA_ADDR", "EMAIL", "PAN",
     "INSURANCE", "MRN", "HOUSE", "LOCALITY", "LANDMARK", "VILLAGE", "TEHSIL", "PIN", "DOB",
-    "ADDRESS",
+    "ADDRESS", "ENCODED",
 }
 # Spans that are transformed, not removed.
 TRANSFORM_TYPES = {"DATE", "AGE", "DIAG"}
 
 
-@dataclass
+@dataclass(slots=True)
 class Span:
     start: int
     end: int
@@ -28,7 +28,7 @@ class Span:
         return self.start < other.end and other.start < self.end
 
 
-@dataclass
+@dataclass(slots=True)
 class Slot:
     """One rewritable string inside a document."""
     path: tuple            # CSV: (row, col); JSON: key path; text: ()
@@ -44,7 +44,7 @@ class Slot:
     out: Any = None        # rewritten value
 
 
-@dataclass
+@dataclass(slots=True)
 class Evidence:
     ids: set = field(default_factory=set)          # ("uhid", "SNJ26064127") ...
     phones: set = field(default_factory=set)
@@ -59,7 +59,7 @@ class Evidence:
     aadhaar_last4: set = field(default_factory=set)
 
 
-@dataclass
+@dataclass(slots=True)
 class Record:
     loc: str
     slots: list[Slot] = field(default_factory=list)
@@ -70,7 +70,7 @@ class Record:
     generalized: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class Doc:
     rel: str
     sha256: str

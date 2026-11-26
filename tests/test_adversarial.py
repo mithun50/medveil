@@ -1,0 +1,136 @@
+"""Tests for tools/adversarial_gen.py.
+
+The core invariant: every disguise the generator can apply is undone by the scorer-style
+normaliser in verify mode. If that ever breaks, the "raw copy leaks near 100%" sanity
+check is meaningless, so these tests pin it down. The kit-gated test also checks the
+generator's correctness properties (preserve probes survive verbatim, truth keeps the
+clean surface, hostile metadata is written).
+"""
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+TOOLS = ROOT / "tools"
+sys.path.insert(0, str(TOOLS))
+
+_spec = importlib.util.spec_from_file_location("adversarial_gen", TOOLS / "adversarial_gen.py")
+adv = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(adv)
+
+KIT = ROOT.parent / "Secret-Wards-ToolKit"
+
+NAME_SAMPLES = ["Mahesh Chauhan", "Fatima Bano", "Asha", "anita.sharma8186@example.com", "DCSPS3454E"]
+DIGIT_SAMPLES = ["9876543210", "397205839628", "91-7938-3729-8403", "SNJ/26/064127", "IPD-2026-00461"]
+
+
+def _alnum(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+@pytest.mark.parametrize("surface", NAME_SAMPLES)
+@pytest.mark.parametrize("kind", adv.NAME_TWEAKS)
+def test_name_tweaks_are_undone_by_the_normaliser(kind, surface):
+    tweaked = adv.tweak_name(surface, kind, "\u200b")
+    if tweaked is None:
+        pytest.skip("tweak does not change this surface")
+    assert tweaked != surface
+    folded = adv.normalise_blob(tweaked)
+    for tok in re.findall(r"[a-z0-9]+", surface.casefold()):
+        assert tok in folded, "token %r lost after %s -> %r" % (tok, kind, folded)
+
+
+@pytest.mark.parametrize("surface", DIGIT_SAMPLES)
+@pytest.mark.parametrize("kind", adv.DIGIT_TWEAKS)
+def test_digit_tweaks_are_undone_by_the_normaliser(kind, surface):
+    tweaked = adv.tweak_digits(surface, kind)
+    if tweaked is None:
+        pytest.skip("tweak does not apply to this surface")
+    assert tweaked != surface
+    key = _alnum(re.sub(r"\D", "", surface))
+    recovered = _alnum(adv.normalise_blob(tweaked))
+    assert key in recovered, "digits %r lost after %s -> %r" % (key, kind, recovered)
+
+
+@pytest.mark.parametrize("kind", adv.WRAP_KINDS)
+def test_payload_wrapping_is_decoded_back(kind):
+    line = "Patient Name: Rohit Mehra Mobile 9876543210"
+    blob = adv.wrap_line(line, kind)
+    assert "Rohit" not in blob and "9876543210" not in blob  # really hidden on the surface
+    folded = adv.normalise_blob(blob)
+    assert "rohit" in folded and "mehra" in folded
+    assert "9876543210" in _alnum(folded)
+
+
+def test_cp1252_fallback_picks_an_encodable_tweak():
+    # Cyrillic / fullwidth cannot encode in cp1252; choose_tweak must fall back.
+    for surface in ("Mahesh Chauhan", "Naresh"):
+        kind, new = adv.choose_tweak(surface, "PATIENT_NAME", "cp1252", seed=3, fkey="f")
+        assert new is not None
+        new.encode("cp1252")  # must not raise
+        folded = adv.normalise_blob(new)
+        for tok in re.findall(r"[a-z]+", surface.casefold()):
+            assert tok in folded
+
+
+def test_homoglyph_table_inverts_the_cyrillic_tweak():
+    # Every Cyrillic letter the generator substitutes must fold back to its Latin letter.
+    for latin, cyr in adv._CYR.items():
+        assert adv.fold(cyr) == latin.casefold()
+
+
+@pytest.mark.skipif(not (KIT / "dev" / "input").is_dir(), reason="toolkit not next to the repo")
+def test_generation_keeps_truth_consistent(tmp_path):
+    rc = adv.generate(KIT.resolve(), tmp_path.resolve(), 3)
+    assert rc == 0
+    dest = tmp_path / "3"
+    truth = json.loads((dest / "truth" / "truth.json").read_text(encoding="utf-8"))
+    assert truth["adversarial"]["tweaked_entities"] > 0
+    assert truth["adversarial"]["by_tweak"]
+    assert truth["hostile"], "hostile metadata missing"
+
+    src_in = dest / "input"
+    # Entities keep the ORIGINAL clean surface; tweaked ones carry a tweak kind.
+    seen_tweak = False
+    for rel, f in truth["files"].items():
+        if f.get("category") == "hostile":
+            continue
+        for u in f["units"].values():
+            for e in u["entities"]:
+                if e.get("tweak"):
+                    seen_tweak = True
+                    assert e["tweak"] in set(adv.NAME_TWEAKS) | set(adv.DIGIT_TWEAKS) | set(adv.WRAP_KINDS)
+    assert seen_tweak
+
+    # Every preserve probe must still survive where the scorer looks: the decoded
+    # haystack (raw text + decoded \uXXXX JSON string values + decoded base64 blobs).
+    for rel, f in truth["files"].items():
+        if f.get("category") in ("hostile",) or f.get("format") in ("pdf", "binary"):
+            continue
+        p = src_in / rel
+        if not p.is_file():
+            continue
+        enc = f.get("encoding") or "utf-8"
+        try:
+            text = p.read_bytes().decode(enc)
+        except (UnicodeError, LookupError):
+            continue
+        hay = text + "\n" + "\n".join(dec for _, _, dec in adv.cg.b64_blobs(text))
+        if f.get("format") in ("json", "fhir"):
+            hay += "\n" + adv.cg.decoded_json_text(text)
+        for u in f["units"].values():
+            for pr in u.get("preserve") or []:
+                t = pr.get("text")
+                if not t:
+                    continue
+                assert t in hay, "preserve probe lost in %s: %r" % (rel, t)
+
+    # Hostile files exist on disk and are recorded in both maps.
+    for rel in truth["hostile"]:
+        if truth["files"][rel].get("format") == "symlink":
+            continue
+        assert (src_in / rel).exists(), "missing hostile file %s" % rel

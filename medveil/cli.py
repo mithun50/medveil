@@ -90,7 +90,8 @@ def propagate(rec: Record, pat: list[str], rel: list[str]) -> None:
         new = []
         for m in WORD.finditer(text):
             w = m.group(0)
-            if w[0].isascii() and not (w[0].isupper()):
+            if w[0].isascii() and not any(c.isupper() for c in w):
+                # an all-lowercase word only counts before an honorific ("asha ji")
                 nxt = text[m.end():m.end() + 10].lower()
                 if not re.match(r"\s+(?:ji|sahab|bhai|behenji|didi|amma|bhaiya)\b", nxt):
                     continue
@@ -150,24 +151,60 @@ def main(argv: list[str] | None = None) -> int:
     vault = Vault(out / "quarantine", keys.vault) if policy["quarantine"].get("vault") == "encrypted" else None
 
     # 1. inventory and parse -------------------------------------------------------
-    paths = sorted((p for p in inp.rglob("*") if p.is_file()), key=lambda p: p.relative_to(inp).as_posix())
+    import os
+    import stat as _stat
+    entries = []
+    for root, dirs, fnames in os.walk(inp, followlinks=False):
+        dirs.sort()
+        for n in fnames:
+            entries.append(Path(root) / n)
+    entries.sort(key=lambda p: p.relative_to(inp).as_posix())
+    max_bytes = float(policy["ingest"].get("max_file_mb", 200)) * 1024 * 1024
     docs: list[Doc] = []
-    for p in paths:
+    for p in entries:
         rel = p.relative_to(inp).as_posix()
-        raw = p.read_bytes()
-        doc = Doc(rel=rel, sha256=hashlib.sha256(raw).hexdigest())
+        raw = b""
+        reason = ""
         try:
-            sniff_and_parse(doc, raw, policy)
-            build_slots(doc, classify_header, classify_key)
-            doc.status = "parsed"
-        except Quarantine as q:
-            doc.status, doc.reason = "quarantined", q.reason
-        except Exception:  # noqa: BLE001 - any parser failure means we cannot clean it safely
-            doc.status, doc.reason = "quarantined", "handler_error"
-        if doc.status == "quarantined" and vault is not None:
+            st = os.lstat(p)
+            if _stat.S_ISLNK(st.st_mode):
+                # Never follow links: one could point outside the input or at a device.
+                reason = "symlink"
+                try:
+                    tst = os.stat(p)
+                    if _stat.S_ISREG(tst.st_mode) and tst.st_size <= max_bytes:
+                        raw = p.read_bytes()
+                except OSError:
+                    pass
+            elif not _stat.S_ISREG(st.st_mode):
+                reason = "special_file"
+            elif st.st_size > max_bytes:
+                reason = "too_large"
+                h = hashlib.sha256()
+                with open(p, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+            else:
+                raw = p.read_bytes()
+        except OSError:
+            reason = "unreadable"
+        doc = Doc(rel=rel, sha256=(h.hexdigest() if reason == "too_large" else hashlib.sha256(raw).hexdigest()))
+        if reason:
+            doc.status, doc.reason = "quarantined", reason
+        else:
+            try:
+                sniff_and_parse(doc, raw, policy)
+                build_slots(doc, classify_header, classify_key)
+                doc.status = "parsed"
+            except Quarantine as q:
+                doc.status, doc.reason = "quarantined", q.reason
+            except Exception:  # noqa: BLE001 - any parser failure means we cannot clean it safely
+                doc.status, doc.reason = "quarantined", "handler_error"
+        if doc.status == "quarantined" and vault is not None and raw and reason != "symlink":
             vault.put(doc.sha256, raw, doc.reason)
         doc.tokens = _file_tokens(rel)
         docs.append(doc)
+        raw = b""
     live = [d for d in docs if d.status == "parsed"]
 
     # 2. learn ---------------------------------------------------------------------
@@ -276,6 +313,7 @@ def main(argv: list[str] | None = None) -> int:
     records_out = []
     used_names: set[str] = set()
     pin_digits = int(policy["location"].get("pin_prefix_digits", 3))
+    dob_mode = str(policy.get("dob", {}).get("mode", "suppress"))
     rec_index = {id(r): i for i, (_, r) in enumerate(recs)}
     for d in live:
         try:
@@ -289,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
                 ctx = Ctx(psn=psn, rec_token=keys.opaque(f"{d.rel}#{rec.loc}"),
                           shift=shift_for(keys, canon, policy), band=bands.get(canon), top=top,
                           district=district_name(rec), pat_tokens=pat, rel_tokens=rel, mrn_psn=mrn_psn,
-                          pin_digits=pin_digits)
+                          pin_digits=pin_digits, dob_mode=dob_mode, date_order=d.date_order)
                 rewrite_record(rec, ctx)
                 if rec.loc != "@file":
                     place_psn(rec, ctx, d)

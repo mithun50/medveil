@@ -38,6 +38,24 @@ CHAPTERS = [
     ("U00", "U99", "U00-U99", "Codes for special purposes"),
 ]
 PROC_LABEL = "Procedure (generalized)"
+_SCAN_CAP = 200_000   # display-text matching looks at the first 200k characters of a slot
+_CODE_IN_PARENS = re.compile(r"\(([A-Z]\d{2}(?:\.\d{1,3})?)\)")
+
+
+def _diag_with_code(text: str) -> list[tuple[str, str]]:
+    """("Display text", "CODE") pairs written as "Display text (CODE)". The display regex
+    only runs on a short window before each "(CODE)", so long text stays linear."""
+    out = []
+    if "(" not in text:
+        return out
+    for m in _CODE_IN_PARENS.finditer(text):
+        window = text[max(0, m.start() - 160):m.end()]
+        dm = None
+        for dm in DIAG_WITH_CODE.finditer(window):
+            pass
+        if dm is not None and dm.end() == len(window):
+            out.append((dm.group(1), dm.group(2)))
+    return out
 ICD = re.compile(r"(?<![A-Za-z0-9])([A-Z]\d{2}(?:\.\d{1,3})?)(?![A-Za-z0-9])")
 DIAG_WITH_CODE = re.compile(r"([^\n;:()]{3,90}?(?:\([^()\n]{1,30}\)[^\n;:()]{0,60}?)?)\s*\(([A-Z]\d{2}(?:\.\d{1,3})?)\)")
 PROC_TEXT = re.compile(r"(?i)\bProcedure\s*[:\-]\s*([^\n.;]{4,90}?)(?=\s+(?:done|performed|on\s+day)\b|[.;\n]|$)")
@@ -93,17 +111,18 @@ class RareValues:
                     if len(c) >= 4:
                         self.procs.add(c)
                         self.rec_procs[idx].add(c)
-                for m in DIAG_WITH_CODE.finditer(sl.text):
-                    disp = m.group(1).strip(" ,.-")
-                    code = m.group(2).upper()
+                for m in _diag_with_code(sl.text):
+                    disp = m[0].strip(" ,.-")
+                    code = m[1].upper()
                     if chapter(code) and len(canon(disp)) >= 3:
                         self.displays[code].add(disp)
                         self.rec_codes[idx].add(code)
-                for m in PROC_TEXT.finditer(sl.text):
-                    c = canon(m.group(1))
-                    if len(c) >= 4:
-                        self.procs.add(c)
-                        self.rec_procs[idx].add(c)
+                if "rocedure" in sl.text:
+                    for m in PROC_TEXT.finditer(sl.text):
+                        c = canon(m.group(1))
+                        if len(c) >= 4:
+                            self.procs.add(c)
+                            self.rec_procs[idx].add(c)
             for g in groups.values():
                 code = g.get("code", "")
                 disp = g.get("display") or g.get("text") or ""
@@ -114,13 +133,15 @@ class RareValues:
         # display-only mentions ("Treated for Essential (primary) hypertension.")
         variants = sorted(((canon(v), code) for code, vs in self.displays.items() for v in vs if len(canon(v)) >= 6),
                           key=lambda x: -len(x[0]))
+        procs_sorted = sorted(self.procs, key=lambda s: (-len(s), s))
         for idx, (_d, rec) in enumerate(recs):
-            body = " ".join(canon(sl.text) for sl in rec.slots if sl.kind in ("value", "text") and not sl.number and sl.text)
+            body = " " + " ".join(canon(sl.text[:_SCAN_CAP]) for sl in rec.slots
+                                  if sl.kind in ("value", "text") and not sl.number and sl.text) + " "
             for v, code in variants:
-                if v and f" {v} " in f" {body} ":
+                if f" {v} " in body:
                     self.rec_codes[idx].add(code)
-            for p in sorted(self.procs, key=lambda s: (-len(s), s)):
-                if f" {p} " in f" {body} ":
+            for p in procs_sorted:
+                if f" {p} " in body:
                     self.rec_procs[idx].add(p)
 
     def plan(self, profile_of: dict[int, str]) -> None:
