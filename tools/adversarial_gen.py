@@ -226,6 +226,16 @@ def _decode_roundtrip(raw: bytes, enc: str):
     return t if t.encode(enc) == raw else None
 
 
+def _json_parses(text: str) -> bool:
+    """True if json.loads accepts text. Deeply nested input (the kit ships a 1,500-deep file)
+    raises RecursionError on Python 3.10 and 3.11 at the default recursion limit."""
+    try:
+        json.loads(text)
+        return True
+    except (ValueError, RecursionError):
+        return False
+
+
 def tweak_file(rel: str, f: dict, raw: bytes, seed: int, wrap_kind: str | None, summary: Counter):
     """Return (new_bytes, new_file_truth, changed) with eligible content surfaces disguised
     and, when wrap_kind is set, one PII line of a text note replaced by an encoded blob."""
@@ -330,16 +340,9 @@ def tweak_file(rel: str, f: dict, raw: bytes, seed: int, wrap_kind: str | None, 
     except UnicodeEncodeError:
         return raw, fc, False
     if fmt in ("json", "fhir"):
-        try:
-            json.loads(text)
-            parseable_before = True
-        except ValueError:
-            parseable_before = False
-        if parseable_before:
-            try:
-                json.loads(new_text)
-            except ValueError:
-                return raw, fc, False
+        # Deep JSON raises RecursionError, not ValueError: treat it as "not parseable before".
+        if _json_parses(text) and not _json_parses(new_text):
+            return raw, fc, False
     if fmt in ("csv", "tsv"):
         delim = f.get("delimiter") or ("\t" if fmt == "tsv" else ",")
         if cg.csv_shape(text, delim) != cg.csv_shape(new_text, delim):

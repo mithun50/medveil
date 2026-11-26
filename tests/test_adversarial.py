@@ -83,6 +83,23 @@ def test_homoglyph_table_inverts_the_cyrillic_tweak():
         assert adv.fold(cyr) == latin.casefold()
 
 
+def test_tweak_file_survives_json_too_deep_to_parse():
+    # Regression: the kit ships a 1,500-deep JSON file. On Python 3.10 and 3.11 json.loads
+    # raises RecursionError (not ValueError) on it, which crashed generation in CI. 100,000
+    # levels raise RecursionError on every supported version, whatever the recursion limit.
+    deep = "[" * 100_000 + "]" * 100_000
+    text = '{"name": "Mahesh Chauhan", "x": %s}\n' % deep
+    f = {"format": "json", "encoding": "utf-8", "sha256": "deep",
+         "units": {"/": {"entities": [{"channel": "content", "type": "PATIENT_NAME",
+                                      "surface": "Mahesh Chauhan"}], "preserve": []}}}
+    changed_any = False
+    for seed in range(20):  # some seeds select the surface for tweaking, some do not
+        data, _, changed = adv.tweak_file("deep.json", f, text.encode("utf-8"), seed, None, adv.Counter())
+        changed_any |= changed
+        assert data.endswith(b"}\n")
+    assert changed_any, "no seed tweaked the name, so the JSON check was never reached"
+
+
 @pytest.mark.skipif(not (KIT / "dev" / "input").is_dir(), reason="toolkit not next to the repo")
 def test_generation_keeps_truth_consistent(tmp_path):
     rc = adv.generate(KIT.resolve(), tmp_path.resolve(), 3)
