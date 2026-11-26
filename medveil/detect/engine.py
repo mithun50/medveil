@@ -29,6 +29,8 @@ _HAS_UP = re.compile(r"[A-Z]")
 _HAS_DG = re.compile(r"\d")
 _CHUNK_OVER = 32_768        # slots longer than this are detected chunk by chunk
 _CHUNK_LEN = 4_096          # target chunk size; cuts only at a newline or whitespace
+_CHUNK_MARGIN = 256         # each chunk is detected with this much of the next one appended
+_WS = re.compile(r"\s")
 # lowercase text still gets name detection when a strong cue is present ("name: rohit mehra")
 _NAME_CUE = re.compile(r"(?i)\b(?:name|naam|patient|attendant|guardian|husband|father|wife|mother|informant|"
                        r"called by|witnessed by|raised by|report of|[sdwcb]\s?/\s?o|ji|sahab|bhai|behenji|didi|amma|"
@@ -453,22 +455,42 @@ def _chunks(text: str):
 
 def _detect_chunked(sl: Slot, K: Knowledge, doc: Doc, file_level: bool) -> None:
     """Detection for very long text in chunks. Identical chunks (degenerate or repeated
-    content) are detected once, which keeps hostile inputs like 'Dr. ' * 300000 linear."""
-    cache: dict[str, tuple[list, list]] = {}
+    content) are detected once, which keeps hostile inputs like 'Dr. ' * 300000 linear.
+
+    Each chunk is detected together with a margin taken from the start of the next chunk
+    (extended to the next whitespace), so a name or a spaced phone number cut by the chunk
+    boundary is still matched whole. A span belongs to the chunk it starts in; a span of
+    the next chunk that starts inside one already taken is dropped."""
+    text = sl.text
+    n = len(text)
+    cache: dict[tuple[str, str], tuple[list, list]] = {}
     spans: list[Span] = []
     prot: list = []
-    for off, chunk in _chunks(sl.text):
-        hit = cache.get(chunk)
+    taken_until = 0
+    for off, chunk in _chunks(text):
+        end = off + len(chunk)
+        tail = ""
+        if end < n:
+            m_end = min(n, end + _CHUNK_MARGIN)
+            ws = _WS.search(text, m_end, min(n, m_end + _CHUNK_LEN))
+            tail = text[end:(ws.start() if ws else m_end)]
+        key = (chunk, tail)
+        hit = cache.get(key)
         if hit is None:
-            sub = Slot(path=sl.path, text=chunk, ftype=sl.ftype, key=sl.key, kind=sl.kind)
+            sub = Slot(path=sl.path, text=chunk + tail, ftype=sl.ftype, key=sl.key, kind=sl.kind)
             detect_slot(sub, K, doc, file_level, 1)
             hit = (sub.spans, sub.protected)
             if len(cache) < 4096:
-                cache[chunk] = hit
+                cache[key] = hit
+        own = len(chunk)
         for sp in hit[0]:
+            if sp.start >= own or sp.start + off < taken_until:
+                continue
             spans.append(Span(sp.start + off, sp.end + off, sp.etype, sp.role, sp.value, sp.conf, sp.rule))
+            taken_until = max(taken_until, sp.end + off)
         for s, e, k in hit[1]:
-            prot.append((s + off, e + off, k))
+            if s < own:
+                prot.append((s + off, e + off, k))
     sl.spans = spans
     sl.protected = prot
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import re
 from functools import lru_cache
 
@@ -16,8 +17,10 @@ from .textnorm import b64_text, normalize
 
 MAGIC = (b"%PDF", b"\xff\xd8\xff", b"\x89PNG", b"PK\x03\x04", b"PK\x05\x06", b"\x1f\x8b", b"\xd0\xcf\x11\xe0",
          b"GIF8", b"RIFF", b"\x00\x00\x01\x00", b"Rar!", b"7z\xbc\xaf", b"ID3", b"OggS", b"\x7fELF",
-         b"MZ\x90\x00", b"\xca\xfe\xba\xbe", b"\xcf\xfa\xed\xfe", b"BZh", b"\xfd7zXZ", b"\x28\xb5\x2f\xfd",
-         b"SQLite format 3", b"\x00asm")
+         b"MZ\x90\x00", b"BZh", b"\xfd7zXZ", b"\x28\xb5\x2f\xfd", b"SQLite format 3", b"\x00asm",
+         # Mach-O 32/64-bit in both byte orders, and universal ("fat") binaries in both orders
+         b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
+         b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca")
 MOJIBAKE = re.compile("Ã[\x80-\xbf\u0080-\u00ff]|â€|Â[\u00a0-\u00bf]|ï¿½|ÿþ|þÿ")
 CSV_EXT = {".csv": ",", ".tsv": "\t", ".tab": "\t", ".psv": "|"}
 JSON_EXT = {".json", ".fhir", ".geojson"}
@@ -173,7 +176,7 @@ def _reject_constant(name: str):
 
 def _finite_float(s: str) -> float:
     v = float(s)
-    if v != v or v in (float("inf"), float("-inf")):
+    if not math.isfinite(v):
         raise ValueError("non-finite number")
     return v
 

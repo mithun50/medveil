@@ -10,7 +10,9 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
+import stat as _stat
 import sys
 import time
 from collections import Counter, defaultdict
@@ -121,6 +123,26 @@ def _clean_path(s: str) -> Path:
     return Path(s).resolve()
 
 
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
+def _read_regular(p: Path, max_bytes: float):
+    """(raw, reason, sha256 object) for a path that lstat saw as a regular file. The file is
+    opened without following links and re-checked on the open handle, so a swap to a link
+    or a FIFO after the lstat is caught instead of followed or blocked on."""
+    fd = os.open(p, _OPEN_FLAGS)
+    with os.fdopen(fd, "rb") as fh:
+        fst = os.fstat(fh.fileno())
+        if not _stat.S_ISREG(fst.st_mode):
+            return b"", "special_file", None
+        if fst.st_size > max_bytes:
+            h = hashlib.sha256()
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+            return b"", "too_large", h
+        return fh.read(), "", None
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="medveil", description="Offline privacy firewall for hospital records")
     ap.add_argument("--input", required=True)
@@ -151,8 +173,6 @@ def main(argv: list[str] | None = None) -> int:
     vault = Vault(out / "quarantine", keys.vault) if policy["quarantine"].get("vault") == "encrypted" else None
 
     # 1. inventory and parse -------------------------------------------------------
-    import os
-    import stat as _stat
     entries = []
     for root, dirs, fnames in os.walk(inp, followlinks=False):
         dirs.sort()
@@ -168,7 +188,9 @@ def main(argv: list[str] | None = None) -> int:
         try:
             st = os.lstat(p)
             if _stat.S_ISLNK(st.st_mode):
-                # Never follow links: one could point outside the input or at a device.
+                # A link is never parsed, copied or stored: it could point outside the input or
+                # at a device. A regular target is read only to report its SHA-256, the hash
+                # anyone reading the input path gets.
                 reason = "symlink"
                 try:
                     tst = os.stat(p)
@@ -178,14 +200,8 @@ def main(argv: list[str] | None = None) -> int:
                     pass
             elif not _stat.S_ISREG(st.st_mode):
                 reason = "special_file"
-            elif st.st_size > max_bytes:
-                reason = "too_large"
-                h = hashlib.sha256()
-                with open(p, "rb") as fh:
-                    for chunk in iter(lambda: fh.read(1 << 20), b""):
-                        h.update(chunk)
             else:
-                raw = p.read_bytes()
+                raw, reason, h = _read_regular(p, max_bytes)
         except OSError:
             reason = "unreadable"
         doc = Doc(rel=rel, sha256=(h.hexdigest() if reason == "too_large" else hashlib.sha256(raw).hexdigest()))

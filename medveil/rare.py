@@ -38,7 +38,6 @@ CHAPTERS = [
     ("U00", "U99", "U00-U99", "Codes for special purposes"),
 ]
 PROC_LABEL = "Procedure (generalized)"
-_SCAN_CAP = 200_000   # display-text matching looks at the first 200k characters of a slot
 _CODE_IN_PARENS = re.compile(r"\(([A-Z]\d{2}(?:\.\d{1,3})?)\)")
 
 
@@ -49,7 +48,8 @@ def _diag_with_code(text: str) -> list[tuple[str, str]]:
     if "(" not in text:
         return out
     for m in _CODE_IN_PARENS.finditer(text):
-        window = text[max(0, m.start() - 160):m.end()]
+        # DIAG_WITH_CODE allows up to 182 characters (plus spaces) before "(CODE)"
+        window = text[max(0, m.start() - 256):m.end()]
         dm = None
         for dm in DIAG_WITH_CODE.finditer(window):
             pass
@@ -117,7 +117,7 @@ class RareValues:
                     if chapter(code) and len(canon(disp)) >= 3:
                         self.displays[code].add(disp)
                         self.rec_codes[idx].add(code)
-                if "rocedure" in sl.text:
+                if "procedure" in sl.text.lower():
                     for m in PROC_TEXT.finditer(sl.text):
                         c = canon(m.group(1))
                         if len(c) >= 4:
@@ -134,14 +134,19 @@ class RareValues:
         variants = sorted(((canon(v), code) for code, vs in self.displays.items() for v in vs if len(canon(v)) >= 6),
                           key=lambda x: -len(x[0]))
         procs_sorted = sorted(self.procs, key=lambda s: (-len(s), s))
+        variant_words = [(v, code, set(v.split())) for v, code in variants]
+        proc_words = [(p, set(p.split())) for p in procs_sorted]
         for idx, (_d, rec) in enumerate(recs):
-            body = " " + " ".join(canon(sl.text[:_SCAN_CAP]) for sl in rec.slots
+            body = " " + " ".join(canon(sl.text) for sl in rec.slots
                                   if sl.kind in ("value", "text") and not sl.number and sl.text) + " "
-            for v, code in variants:
-                if f" {v} " in body:
+            # Whole text, no cap: a value is only searched for when all its words occur in the
+            # record, which keeps megabyte notes with few distinct words cheap.
+            words = set(body.split())
+            for v, code, vw in variant_words:
+                if vw <= words and f" {v} " in body:
                     self.rec_codes[idx].add(code)
-            for p in procs_sorted:
-                if f" {p} " in body:
+            for p, pw in proc_words:
+                if pw <= words and f" {p} " in body:
                     self.rec_procs[idx].add(p)
 
     def plan(self, profile_of: dict[int, str]) -> None:

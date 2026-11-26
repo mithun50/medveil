@@ -85,11 +85,11 @@ def replacement(sp: Span, sl: Slot, ctx: Ctx, structured: bool) -> str:
     if structured:
         if t == "DOB":
             if ctx.dob_mode == "shift":
+                # Only the shifted dates are written: anything else in a DOB field (a name,
+                # a phone typed into the wrong column) is dropped, as in suppress mode.
                 hits = find_dates(sl.text[sp.start:sp.end], ctx.date_order)
                 if hits:
-                    h = hits[0]
-                    return sl.text[sp.start:sp.start + h.start] + render(h, shift_date(h.date, ctx.shift)) + \
-                        sl.text[sp.start + h.end:sp.end]
+                    return ", ".join(render(h, shift_date(h.date, ctx.shift)) for h in hits)
             return ""
         if t in ("VILLAGE", "TEHSIL"):
             return ctx.district or PLACEHOLDER[t]
@@ -207,7 +207,7 @@ def serialize(doc: Doc) -> str:
                 if sl.out is not None:
                     keys[sl.path] = sl.out
             else:
-                if doc.fmt == "fhir" and sl.ftype == "DOB" and sl.out == "":
+                if doc.fmt == "fhir" and sl.ftype == "DOB" and isinstance(sl.out, str) and not sl.out.strip():
                     drop.add(sl.path)
                     continue
                 leaf[sl.path] = final_value(sl)

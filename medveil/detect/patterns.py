@@ -70,6 +70,16 @@ _CO = re.compile(r"\bC\s?/\s?O\b\.?\s*[:\-]?\s*", re.I)
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*|[\u0900-\u097F]+")
 
 
+# Hinglish body parts and complaint words seen after "C/O" ("C/O gala kharab", "C/O kaan dard").
+# Kept local: some ("gala", "kaan") are also surnames, so they must not become stopwords.
+_CO_HINGLISH = frozenset("""
+gala gale kaan kan kamar ghutna ghutne aankh aankhon ankh daant dant sar sir pet seena chhati chati
+naak nak haath hath pair pairon pao paon pith peeth gardan jodon jod sardi jukam zukam khansi saans
+kamzori jalan sujan sujaan khujli ulti dast bukhar chakkar peshab pesab ghabrahat bechaini
+""".split())
+_CO_TAIL = frozenset("dard kharab kharash pain ache aching swelling sujan jalan mein me se bhari".split())
+
+
 def co_is_complaint(text: str, pos: int) -> bool:
     """True if the words after a C/O at `pos` describe a complaint, not a person."""
     m = _WORD.search(text, pos, min(len(text), pos + 60))
@@ -82,6 +92,10 @@ def co_is_complaint(text: str, pos: int) -> bool:
     if re.match(r"[\u0900-\u097F]", w):
         from ..lexicon import HINDI_COMMON
         return w in HINDI_COMMON
+    if w.islower():
+        nxt = _WORD.match(text, m.end() + 1) if text[m.end():m.end() + 1] == " " else None
+        if lw in _CO_HINGLISH or (nxt is not None and nxt.group(0).lower() in _CO_TAIL):
+            return True
     # "C/O rAmEsH": odd casing or a known name after C/O is a person, not a complaint
     if any(c.isupper() for c in w[1:]) or is_name_token(w):
         return False

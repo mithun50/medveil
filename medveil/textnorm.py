@@ -49,7 +49,7 @@ _U_ESC = re.compile(r"(?:\\u[0-9a-fA-F]{4})+")
 _NUM_ENT = re.compile(r"&#(?:\d{2,7}|[xX][0-9a-fA-F]{2,6});")
 _NAMED_ENT = re.compile(r"&(?:amp|lt|gt|quot|apos|nbsp);")
 _PCT_ONE = re.compile(r"%[0-9A-Fa-f]{2}")
-_PCT_RUN = re.compile(r"[^\s%]*(?:%[0-9A-Fa-f]{2}[^\s%]*)+")
+_NONSPACE = re.compile(r"\S+")
 
 
 def _strip_latin_diacritics(text: str) -> str:
@@ -84,11 +84,14 @@ def _decode_u(m: re.Match) -> str:
 
 
 def _decode_pct(m: re.Match) -> str:
+    tok = m.group(0)
+    if "%" not in tok or _PCT_ONE.search(tok) is None:
+        return tok
     try:
-        out = unquote(m.group(0), errors="strict")
+        out = unquote(tok, errors="strict")
     except UnicodeDecodeError:
-        return m.group(0)
-    return out if out.isprintable() else m.group(0)
+        return tok
+    return out if out.isprintable() else tok
 
 
 def decode_escapes(text: str, entities: bool = True) -> str:
@@ -98,9 +101,11 @@ def decode_escapes(text: str, entities: bool = True) -> str:
     if entities and "&" in text:
         text = _NUM_ENT.sub(lambda m: html.unescape(m.group(0)), text)
         text = _NAMED_ENT.sub(lambda m: html.unescape(m.group(0)), text)
-    if "%" in text and len(_PCT_ONE.findall(text)) >= 2:
-        # URL-encoded runs ("Name%3A%20Rohit%20Mehra") are decoded in place
-        text = _PCT_RUN.sub(lambda m: _decode_pct(m) if len(_PCT_ONE.findall(m.group(0))) >= 2 else m.group(0), text)
+    if "%" in text and _PCT_ONE.search(text):
+        # URL-encoded tokens ("Name%3A%20Rohit%20Mehra", "Roh%69t") are decoded in place.
+        # Whitespace-delimited tokens keep this linear; a pattern with an unanchored prefix
+        # backtracks quadratically on long tokens.
+        text = _NONSPACE.sub(_decode_pct, text)
     return text
 
 
@@ -109,8 +114,10 @@ def normalize(text: str, entities: bool = True) -> str:
 
 
 _B64_FULL = re.compile(r"^[A-Za-z0-9+/\r\n]+={0,2}$")
-B64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])")
-B64_RUN_INNER = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{14,}={0,2}(?![A-Za-z0-9+/=])")
+# 14 characters plus padding is the 16-character base64 of a 10-digit phone ("OTg3NjU0MzIxMA==");
+# b64_text then requires 16+ characters, a multiple of 4 and readable decoded text.
+B64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{14,}={0,2}(?![A-Za-z0-9+/=])")
+B64_RUN_INNER = B64_RUN
 
 
 def b64_text(value: str) -> str | None:
@@ -144,14 +151,24 @@ def b64_encode_text(text: str) -> str:
 HEX_RUN = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}){8,}(?![0-9A-Fa-f])")
 
 
+_HEX_DIGITS_ONLY = re.compile(r"(?:3[0-9]){8,}")      # hex of ASCII digits only
+_DIGITS_TEXT = re.compile(r"[\d +\-]{8,}")
+
+
 def hex_text(value: str) -> str | None:
-    """Decoded text if `value` is hex of readable UTF-8 with letters in it, else None."""
-    if len(value) % 2 or not re.search(r"[A-Fa-f]", value) and len(value) < 24:
+    """Decoded text if `value` is hex of readable UTF-8 with letters in it, or hex of a
+    digit string ("39383736353433323130" is the phone 9876543210), else None."""
+    if len(value) % 2:
+        return None
+    digits_only = _HEX_DIGITS_ONLY.fullmatch(value) is not None
+    if not digits_only and not re.search(r"[A-Fa-f]", value) and len(value) < 24:
         return None
     try:
         txt = bytes.fromhex(value).decode("utf-8")
     except (ValueError, UnicodeDecodeError):
         return None
+    if digits_only:
+        return txt if _DIGITS_TEXT.fullmatch(txt) else None
     if not txt or not re.search(r"[A-Za-z\u0900-\u097F]{2}", txt):
         return None
     printable = sum(1 for c in txt if c.isprintable() or c in "\r\n\t")

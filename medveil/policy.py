@@ -16,6 +16,9 @@ DEFAULTS: dict = {
 }
 
 
+DOB_MODES = ("suppress", "shift")
+
+
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in (over or {}).items():
@@ -34,4 +37,8 @@ def load(path: Path) -> dict:
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         except Exception:  # noqa: BLE001 - a broken policy must not stop the run; defaults apply
             data = {}
-    return _merge(DEFAULTS, data if isinstance(data, dict) else {})
+    pol = _merge(DEFAULTS, data if isinstance(data, dict) else {})
+    # Only these DOB modes are implemented; anything else falls back to the safest one.
+    if not isinstance(pol.get("dob"), dict) or pol["dob"].get("mode") not in DOB_MODES:
+        pol["dob"] = dict(DEFAULTS["dob"])
+    return pol

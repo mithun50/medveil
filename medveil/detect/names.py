@@ -89,12 +89,16 @@ _NOT_A_NAME = frozenset("not na nil none unknown self same as above below given 
                         "stated known baby infant child n/a".split())
 
 
+# letters with internal hyphens or apostrophes, as the tokenizer keeps them: "anne-marie", "o'brien"
+_ANYCASE_TOK = re.compile(r"[A-Za-z]+(?:['\-][A-Za-z]+)*")
+
+
 def is_lat_name_tok_anycase(t: str) -> bool:
     """After a strong cue (a label, a relation marker) a word is a name whatever its case:
     'name: rohit mehra' and 'Name: rOhIt' are as personal as 'Name: Rohit'."""
     b = _bare(t)
     lb = b.lower()
-    if len(b) < 2 or not b.isalpha():
+    if len(b) < 2 or not _ANYCASE_TOK.fullmatch(b):
         return False
     if lb in LABEL_WORDS or lb in _NOT_A_NAME or is_stopword(lb) or lb in HONORIFIC_POST or lb in HONORIFIC_PRE:
         return False
@@ -246,6 +250,21 @@ _KINSHIP = {"bhaiya", "bhaiyya", "mama", "mami", "chacha", "chachi", "mausi", "m
 _ADJ_GAP = re.compile(r"^[\s,;:]*(?:\([^)\n]{0,40}\))?[\s,;:]*(?:(?:mob(?:ile)?|ph(?:one)?|contact|tel|cell|no|call)\.?\s*(?:no\.?)?)?[\s.:\-#]*$", re.I)
 
 
+def _known_run(T: Toks, r: tuple[int, int] | None) -> tuple[int, int] | None:
+    """The leading tokens of run r that are known given names or surnames, or None."""
+    if r is None:
+        return None
+    last = None
+    for k in range(r[0], r[1] + 1):
+        tk = T.t[k]
+        if tk.kind == "ws":
+            continue
+        if tk.kind != "lat" or not is_name_token(_bare(tk.text)):
+            break
+        last = k
+    return (r[0], last) if last is not None else None
+
+
 def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
     if not text or not re.search(r"[A-Za-z\u0900-\u097F]", text):
         return []
@@ -279,9 +298,16 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             j = idx_at(m.end())
             if j is None or toks[j].kind not in ("lat", "deva"):
                 continue
-            # a bare "Patient:" is often followed by clinical words; only name labels accept any case
+            # Any letter case only after an explicit separator ("name: rohit mehra"); "report of"
+            # or "reported by" without one is often followed by clinical words. A bare "Patient:"
+            # is often followed by a complaint, so there lowercase words count only while they
+            # are known given names or surnames ("Patient: rohit mehra", not "Patient: fever").
             bare = re.sub(r"[\s:\-=]+$", "", m.group(0)).strip().lower().rstrip(".")
-            r = T.take_name(j, any_case=bare not in ("patient", "pt"))
+            sep = re.search(r"[:\-=]\s*$", m.group(0)) is not None
+            if bare in ("patient", "pt"):
+                r = T.take_name(j) or _known_run(T, T.take_name(j, any_case=True))
+            else:
+                r = T.take_name(j, any_case=sep)
             if r:
                 add(r[0], r[1], role, 0.95, "label")
     # 2. relation markers

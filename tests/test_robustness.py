@@ -6,7 +6,9 @@ so a tweaked identifier we fail to remove still counts as a leak. Every case bel
 was a miss before the hardening in this change. Sentences are written by us.
 """
 import base64
+import hashlib
 import json
+import os
 import time
 
 import pytest
@@ -37,7 +39,7 @@ def found(text, etype=None):
     "Patient Name: Ro\u202ehit Mehra",                       # bidi override
 ])
 def test_tweaked_names_are_found(text):
-    assert found(text, "NAME") or found(text, "ENCODED")
+    assert found(text, "NAME")
 
 
 @pytest.mark.parametrize("text", [
@@ -83,6 +85,10 @@ def test_fold_keeps_devanagari_marks():
     (b"PK\x03\x04" + b"\x00" * 50, "unsupported_binary"), (b"\x1f\x8b\x08" + b"\x00" * 50, "unsupported_binary"),
     (b"<?xml version='1.0'?><!DOCTYPE x [<!ENTITY a 'b'>]><x>&a;</x>", "unsupported_markup"),
     (b"[" * 5000 + b"]" * 5000, "too_deep"),
+    # Mach-O 32-bit and 64-bit in both byte orders, universal binary in both orders. Printable
+    # padding: without NUL bytes only the magic number tells these apart from cp1252 text.
+    (b"\xfe\xed\xfa\xce" + b"A" * 50, "unsupported_binary"), (b"\xce\xfa\xed\xfe" + b"A" * 50, "unsupported_binary"),
+    (b"\xfe\xed\xfa\xcf" + b"A" * 50, "unsupported_binary"), (b"\xbe\xba\xfe\xca" + b"A" * 50, "unsupported_binary"),
 ])
 def test_hostile_files_are_quarantined(raw, reason):
     doc = Doc(rel="hostile/f.json", sha256="0")
@@ -104,3 +110,88 @@ def test_json_output_never_contains_nan():
     doc = Doc(rel="a.json", sha256="0")
     sniff_and_parse(doc, b'{"value": 1.5, "n": 12}', DEFAULTS)
     assert json.dumps(doc.data) == '{"value": 1.5, "n": 12}'
+
+# ---------------------------------------------------------------- review findings, PR #3
+
+def test_pii_cut_by_a_chunk_boundary_is_found_whole():
+    # Text over 32 KB is detected in ~4 KB chunks cut at whitespace. This layout puts the cut
+    # between the two halves of a space-separated phone number.
+    text = "x " * 2045 + "98765 43210\n" + "x " * 15000
+    assert len(text) > 32_768
+    assert ("PHONE", "98765 43210") in found(text, "PHONE")
+
+
+def test_pii_at_a_chunk_boundary_is_not_counted_twice():
+    text = "x " * 2041 + "Patient Name: Rohit Mehra\n" + "x " * 15000
+    names = found(text, "NAME")
+    assert names == [("NAME", "Rohit Mehra")]
+
+
+@pytest.mark.parametrize("text", [
+    "Attachment: OTg3NjU0MzIxMA==",                 # base64 of a phone, 16 characters
+    "ref 39383736353433323130",                     # hex of the ASCII digits 9876543210
+])
+def test_short_or_digit_only_encodings_are_removed(text):
+    assert found(text, "ENCODED")
+
+
+def test_single_percent_escape_is_decoded():
+    assert ("NAME", "Rohit Mehra") in found("Patient Name: Roh%69t Mehra", "NAME")
+
+
+def test_percent_decoding_is_linear():
+    text = "%41%42 " + "G" * 200_000
+    t0 = time.perf_counter()
+    normalize(text)
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_plain_hex_and_numbers_are_not_payloads():
+    # ordinary IDs, lab values and long words stay untouched
+    for text in ("Sample ID 3130313031303130", "Hb 11.2 g/dL, TLC 7600", "hepatosplenomegaly noted"):
+        assert not found(text, "ENCODED"), text
+
+
+def test_lowercase_known_name_after_bare_patient_label():
+    assert ("NAME", "rohit mehra") in found("Patient: rohit mehra, 45 yrs", "NAME")
+
+
+@pytest.mark.parametrize("text", ["Patient: fever and cough since 3 days", "Patient: c/o pain abdomen"])
+def test_complaint_after_bare_patient_label_is_kept(text):
+    assert not found(text, "NAME")
+
+
+def test_lowercase_names_with_hyphen_or_apostrophe():
+    assert ("NAME", "anne-marie o'brien") in found("Name: anne-marie o'brien", "NAME")
+
+
+@pytest.mark.parametrize("text", ["Report of sonography whole abdomen", "Report of lipid profile"])
+def test_labels_without_separator_need_capitalised_names(text):
+    assert not found(text, "NAME")
+
+
+@pytest.mark.parametrize("text", ["C/O gala kharab since 2 days", "C/O kaan dard", "c/o kamar mein dard"])
+def test_hinglish_complaints_after_care_of_are_kept(text):
+    assert not found(text, "NAME")
+
+
+def test_care_of_lowercase_known_name_is_still_a_person():
+    assert any(t == "NAME" for t, _ in found("Address: C/O ramesh yadav, Rampur"))
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs POSIX FIFOs")
+def test_fifo_at_a_regular_path_is_not_read(tmp_path):
+    from medveil.cli import _read_regular
+    fifo = tmp_path / "notes.txt"
+    os.mkfifo(fifo)
+    raw, reason, _ = _read_regular(fifo, 1 << 20)   # must return at once, not block
+    assert (raw, reason) == (b"", "special_file")
+
+
+def test_regular_file_read_and_size_limit(tmp_path):
+    from medveil.cli import _read_regular
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"hello world")
+    assert _read_regular(f, 1 << 20)[:2] == (b"hello world", "")
+    raw, reason, h = _read_regular(f, 4)
+    assert (raw, reason) == (b"", "too_large") and h.hexdigest() == hashlib.sha256(b"hello world").hexdigest()
