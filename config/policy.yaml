@@ -15,6 +15,9 @@ age:
   ladder: [10, 20]         # aligned band widths tried in order
   top_code: 80             # ages 80 and above become "80+"
   k_patients: 2            # keep 10-year bands only if 2+ patients share (gender, band, district)
+  k_condition: 3           # patients publishing one diagnosis get bands wide enough that 3 of them
+                           # fit any one patient's gender/age/district (targeted attack A5);
+                           # measured with tools/sweep.py: est. total 95.96 -> 96.99
 
 location:
   keep_level: district     # district is kept for research; house, mohalla, landmark, village, tehsil removed

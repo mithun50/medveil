@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from .crypto import Keys
@@ -31,6 +31,8 @@ def band_label(b: tuple[int, int] | None, top: int) -> str | None:
     lo, hi = b
     if lo >= top:
         return f"{top}+"
+    if hi >= top + 100:          # widened together with a top-coded band
+        return f"{lo}+"
     return f"{lo}-{hi}"
 
 
@@ -103,6 +105,49 @@ def plan_bands(profiles: dict[str, dict], policy: dict) -> tuple[dict, dict]:
     return out, level
 
 
+def widen_for_conditions(bands: dict, profiles: dict, level: dict, values_of: dict, k: int) -> int:
+    """Targeted-attack defence (k-anonymity on condition + demographics).
+
+    An attacker who knows a patient's condition, gender, age and district looks for the
+    profiles that carry the condition and whose published gender, age band and district
+    are consistent with that person. For every published condition, the profiles carrying
+    it are grouped by gender and published district, sorted by age and cut into runs of
+    at least k; each profile's band is widened to cover its run, so at least k profiles
+    are consistent with any one of them. A group smaller than k is widened as one run,
+    which is as much as age can do for it. Returns the number of profiles whose band
+    changed."""
+    groups: dict[tuple, list[str]] = defaultdict(list)
+    for c, vals in values_of.items():
+        if c not in bands or bands[c] is None:
+            continue
+        p = profiles.get(c, {})
+        loc = p.get("district") if level.get(c) == "district" else None
+        for v in vals:
+            groups[(v, p.get("gender"), loc)].append(c)
+    want: dict[str, tuple[int, int]] = {}
+    for members in groups.values():
+        members = sorted(set(members), key=lambda c: (bands[c][0], bands[c][1], c))
+        if len(members) < 2:
+            continue
+        # a group smaller than k becomes one run: as anonymous as its size allows
+        runs = [members[i:i + k] for i in range(0, len(members), k)]
+        if len(runs) > 1 and len(runs[-1]) < k:
+            last = runs.pop()
+            runs[-1] = runs[-1] + last
+        for run in runs:
+            lo = min(bands[c][0] for c in run)
+            hi = max(bands[c][1] for c in run)
+            for c in run:
+                cur = want.get(c, bands[c])
+                want[c] = (min(cur[0], lo), max(cur[1], hi))
+    changed = 0
+    for c, b in want.items():
+        if b != bands[c]:
+            bands[c] = b
+            changed += 1
+    return changed
+
+
 def shift_for(keys: Keys, canonical: str, policy: dict) -> int:
     d = policy.get("dates", {})
     return keys.shift_days(canonical, int(d.get("shift_min_days", 30)), int(d.get("shift_max_days", 365)))
@@ -115,14 +160,14 @@ def shift_date(d: dt.date, days: int) -> dt.date:
         return d
 
 
-_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?)\s+|(?:जिला|ज़िला)\s+)"
+_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?)\s+|(?:à¤œà¤¿à¤²à¤¾|à¤œà¤¼à¤¿à¤²à¤¾)\s+)"
                        r"([A-Za-z][A-Za-z ]{2,30}?|[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*?)(?=\s*(?:[-,;\n]|$|\s{2}))")
 
 
 def raise_location(rec, level: str, division_of: dict) -> bool:
     """Replace this record's district with its division (or the state) where it appears
     as a location: district fields, village/tehsil fields we already raised, and
-    "Distt. X" / "जिला X" in text. Hospital names are left alone. A district we cannot
+    "Distt. X" / "à¤œà¤¿à¤²à¤¾ X" in text. Hospital names are left alone. A district we cannot
     resolve is replaced by a generic region label rather than kept."""
     from .lexicon import district_of
     changed = False

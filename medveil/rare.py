@@ -166,6 +166,16 @@ class RareValues:
         self.rare_codes = {c for c, ps in by_code.items() if len(ps) <= self.max_profiles and not self._eponym(c)}
         self.rare_procs = {p for p, ps in by_proc.items() if len(ps) <= self.max_profiles}
 
+    def published_values(self, profile_of: dict[int, str]) -> dict[str, set[str]]:
+        """profile -> the diagnoses (ICD codes) and procedures it publishes exactly, that
+        is, everything collected except the values generalized as rare."""
+        out: dict[str, set[str]] = defaultdict(set)
+        for idx, codes in self.rec_codes.items():
+            out[profile_of[idx]] |= codes - self.rare_codes
+        for idx, procs in self.rec_procs.items():
+            out[profile_of[idx]] |= {"procedure:" + p for p in procs - self.rare_procs}
+        return out
+
     def _eponym(self, code: str) -> bool:
         # "Addison's disease" is a scored meaning-trap probe: generalizing it costs more
         # detection precision than it buys privacy, so eponym diagnoses stay exact.

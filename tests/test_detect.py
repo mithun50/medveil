@@ -114,3 +114,17 @@ def test_clean_clinical_text_untouched():
             "2. Paracetamol 650 mg every 6 hours; avoid NSAIDs.\n"
             "3. Differential diagnosis includes typhoid, malaria and, rarely, Addison's disease crisis.")
     assert types(text) <= {"DATE"}
+
+
+
+def test_negative_value_in_an_age_field_is_not_banded():
+    # The practice registry has "-2 वर्ष" in its age column; banding it as 2 published
+    # "-0-9", a band that excludes the recorded value.
+    from medveil.detect.engine import Knowledge, detect_slot
+    from medveil.model import Doc, Slot
+    k = Knowledge()
+    k.finalize()
+    for text, ages in (("-2 \u0935\u0930\u094d\u0937", []), ("45 \u0935\u0930\u094d\u0937", [45])):
+        sl = Slot(path=(0, 3), text=text, ftype="AGE", kind="value", key="Umar")
+        detect_slot(sl, k, Doc(rel="r.tsv", sha256="0"))
+        assert [s.value for s in sl.spans if s.etype == "AGE"] == ages, text

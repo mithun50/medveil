@@ -375,6 +375,10 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
         return
     if ft == "AGE":
         m = re.search(r"\d{1,3}", text)
+        if m and text[:m.start()].strip() == "-":
+            # "-2 years" is an invalid value, not an age of 2: a band would exclude the
+            # recorded value, and a negative number singles nobody out. Left as it is.
+            return
         if m and sl.number:
             sl.spans = [Span(0, len(text), "AGE", value=int(float(text)), rule="field_age")]
         elif m:
