@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from ..lexicon import DEVA_HEADER, HEADER_RULES, is_name_token, is_stopword
+from ..lexicon import DEVA_HEADER, HEADER_RULES, district_of, is_name_token, is_stopword
 
 _RULES = [(re.compile(p), t) for p, t in HEADER_RULES]
 _CAMEL = re.compile(r"(?<=[a-z])(?=[A-Z])")
@@ -20,6 +20,26 @@ def norm_header(h: str) -> str:
     h = h.lower().replace("'s", " s").replace("#", " no ")
     h = re.sub(r"[_\-/().:,]+", " ", h)
     return " ".join(h.split())
+
+
+# "<qualifier> name" is a person's name only for these qualifiers. "test_name",
+# "procedure_name", "hospital_name" or "drug name" label things, not people: typing them
+# NAME would redact the clinical value and, worse, make the record look like it holds two
+# people, so it would never be linked. Such columns fall back to value profiling.
+_PERSON_QUALIFIERS = frozenset("""
+patient patients pt pts full first last given middle family sur surname beneficiary member insured
+claimant customer client applicant person holder card rogi mariz mareez marij poora pura sampoorn
+of the s
+""".split())
+_NAME_WORDS = frozenset("name names naam nam".split())
+
+
+def _non_person_name(n: str) -> bool:
+    words = n.split()
+    if not any(w in _NAME_WORDS for w in words):
+        return False
+    others = [w for w in words if w not in _NAME_WORDS and w not in ("no", "ka", "ki", "ke")]
+    return bool(others) and not any(w in _PERSON_QUALIFIERS for w in others)
 
 
 @lru_cache(maxsize=4096)
@@ -35,6 +55,8 @@ def classify_header(h: str) -> str | None:
     n = norm_header(raw)
     for rx, t in _RULES:
         if rx.search(n):
+            if t == "NAME" and _non_person_name(n):
+                return None
             return t
     return None
 
@@ -156,6 +178,24 @@ _PAN = re.compile(r"^\s*[A-Za-z]{5}\d{4}[A-Za-z]\s*$")
 _NAMEISH = re.compile(r"^\s*(?:[A-Z][a-zA-Z.'\-]*|[\u0900-\u097F]+)(?:\s+(?:[A-Z][a-zA-Z.'\-]*|[\u0900-\u097F]+)){0,3}\s*$")
 
 
+# Indian settlement-name morphology (Latin and Devanagari): Rampur, Mohanganj, Bhimnagar,
+# Shivgarh, Rasoolabad, Durgamau, Jalalpur Khurd, Rasoolkheda, Bhawanidih, Ramgaon.
+_PLACE_END = re.compile(r"(?i)\w{2}(?:pur|pura|puri|purwa|ganj|nagar|garh|gadh|abad|mau|kheda|khera|"
+                        r"dih|gaon|patti|sarai|ghat|kot|bagh)$|^(?:khurd|kalan)$")
+_PLACE_END_DEVA = re.compile(r"(?:पुर|पुरा|गंज|नगर|"
+                             r"गढ़|गढ|आबाद|मऊ|खेड़ा|"
+                             r"खेडा|खुर्द|कलां|डीह|"
+                             r"गांव|गाँव|पट्टी|सराय)$")
+
+
+def _place_like(v: str) -> bool:
+    toks = re.findall(r"[A-Za-z]+|[\u0900-\u097F]+", v)
+    if not toks or len(toks) > 4:
+        return False
+    # a surname such as "Kapur" or "Nagar" is a person's name, not a settlement
+    return any((_PLACE_END.search(t) or _PLACE_END_DEVA.search(t)) and not is_name_token(t) for t in toks)
+
+
 def profile_column(values: list[str]) -> str | None:
     vals = [v for v in (x.strip() for x in values) if v]
     if len(vals) < 2:
@@ -184,4 +224,11 @@ def profile_column(values: list[str]) -> str | None:
                 hits += 1
         if hits / n >= 0.5:
             return "NAME"
+    # Place columns under an unknown header ("Mauza", "Basti"): known districts, or
+    # settlement names by their morphology, and no digits (addresses carry house numbers).
+    if not any(re.search(r"\d", v) for v in vals):
+        if sum(1 for v in vals if district_of(v)) / n >= 0.6:
+            return "DISTRICT"
+        if sum(1 for v in vals if _place_like(v)) / n >= 0.6:
+            return "VILLAGE"
     return None

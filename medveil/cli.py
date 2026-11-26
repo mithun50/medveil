@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import guard
 from .crypto import Keys, Vault
-from .detect.engine import Knowledge, detect_slot, ident_tokens, learn_doc, resolve
+from .detect.engine import Knowledge, detect_slot, ident_tokens, learn_doc, own_ids_in_filename, resolve
 from .detect.fields import classify_header, classify_key
 from .detect.patterns import in_protected
 from .gate import Ledger, scrub
@@ -268,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                     detect_slot(sl, K, d, file_level=(rec.loc == "@file"))
             for fs in d.file_slots:
                 detect_slot(fs, K, d, file_level=True)
+            own_ids_in_filename(d)
         except Exception:  # noqa: BLE001
             d.status, d.reason = "quarantined", "handler_error"
     live = [d for d in live if d.status == "parsed"]

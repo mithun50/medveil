@@ -160,14 +160,14 @@ def shift_date(d: dt.date, days: int) -> dt.date:
         return d
 
 
-_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?)\s+|(?:à¤œà¤¿à¤²à¤¾|à¤œà¤¼à¤¿à¤²à¤¾)\s+)"
+_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?|Janpad|Zila|Jila)\s+|(?:जिला|ज़िला|जनपद)\s+)"
                        r"([A-Za-z][A-Za-z ]{2,30}?|[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*?)(?=\s*(?:[-,;\n]|$|\s{2}))")
 
 
 def raise_location(rec, level: str, division_of: dict) -> bool:
     """Replace this record's district with its division (or the state) where it appears
     as a location: district fields, village/tehsil fields we already raised, and
-    "Distt. X" / "à¤œà¤¿à¤²à¤¾ X" in text. Hospital names are left alone. A district we cannot
+    "Distt. X" / "जिला X" in text. Hospital names are left alone. A district we cannot
     resolve is replaced by a generic region label rather than kept."""
     from .lexicon import district_of
     changed = False

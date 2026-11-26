@@ -439,6 +439,44 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
     sl.spans = resolve(spans)
 
 
+_ID_IN_NAME = re.compile(r"[A-Za-z0-9]+(?:[\-_./][A-Za-z0-9]+)*")
+
+
+def own_ids_in_filename(doc: Doc) -> None:
+    """A file name often repeats the identifier its content carries ("..._DHH-ADM-00591.txt"
+    for "IP No.: DHH/ADM/00591"). Every identifier detected in the document's own content is
+    therefore also removed from its file name, whatever the separators, even when the format
+    is new and shape induction has not seen it twice."""
+    keys = set()
+    for rec in doc.records:
+        for sl in rec.slots:
+            for sp in sl.spans:
+                if sp.etype in ("MRN", "INSURANCE") and isinstance(sp.value, str) and len(sp.value) >= 5:
+                    keys.add(sp.value)
+    if not keys:
+        return
+    for fs in doc.file_slots:
+        if fs.kind != "filename":
+            continue
+        extra = []
+        for m in _ID_IN_NAME.finditer(fs.text):
+            # try the longest run first, then shorter runs inside it (a prefix or suffix may
+            # be glued on: "ds_DHH-ADM-00591")
+            parts = re.split(r"[\-_./]", m.group(0))
+            offs, pos = [], m.start()
+            for p_ in parts:
+                offs.append((pos, pos + len(p_)))
+                pos += len(p_) + 1
+            for i in range(len(parts)):
+                for j in range(len(parts), i, -1):
+                    s, e = offs[i][0], offs[j - 1][1]
+                    if id_key(fs.text[s:e]) in keys:
+                        extra.append(Span(s, e, "MRN", value=id_key(fs.text[s:e]), rule="own_id"))
+                        break
+        if extra:
+            fs.spans = resolve(fs.spans + extra)
+
+
 def _chunks(text: str):
     """Split at newlines; split long lines at the last whitespace before _CHUNK_LEN.
     A run without whitespace (a base64 blob) stays whole so it can still be decoded."""

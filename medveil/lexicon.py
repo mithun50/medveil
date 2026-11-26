@@ -136,7 +136,7 @@ HINDI_COMMON = frozenset("""
 # Header lexicon: normalized header tokens to semantic type. Order matters.
 HEADER_RULES: list[tuple[str, str]] = [
     (r"\b(doctor|dr|consultant|physician|surgeon|ref doctor|referred by|referring|treating|practitioner|author)\b", "DOCTOR"),
-    (r"\b(relation|rel type|relationship)\b$", "RELATION"),
+    (r"\b(relation|rel type|relationship|rel|rishta|sambandh)\b$", "RELATION"),
     (r"\b(?:pita|pati|mata|patni|beta|beti|bete|bahu|sasur|saas|bhai|behen|bahan|abhibhavak|sanrakshak|parijan|"
      r"rishtedar|sambandhi|chacha|chachi|mama|mami|dada|dadi|nana|nani|devar|jeth|bhabhi|pita pati) (?:ka|ki|ke) naam\b", "RELATIVE"),
     (r"\b(pita|pati|father|husband|guardian|relative|attendant|nok|kin|spouse|mother|wife|son of|care of|informant|"
@@ -144,26 +144,30 @@ HEADER_RULES: list[tuple[str, str]] = [
     (r"\b(first ?name|given|fname|forename|pratham naam)\b", "FIRST_NAME"),
     (r"\b(last ?name|surname|family|lname|upnaam)\b", "LAST_NAME"),
     (r"\b(abha ?address|health ?id ?address|phr ?address)\b", "ABHA_ADDR"),
-    (r"\b(abha|health ?id|healthid|ndhm|abdm)\b", "ABHA"),
+    (r"\b(abha|health ?id|healthid|ndhm|abdm|phr ?id|phr ?no)\b", "ABHA"),
     (r"\b(aadhaar|aadhar|adhaar|adhar|aadhaar no|uidai|uid no)\b", "AADHAAR"),
     (r"\b(pan|pan no|pan card|payer pan)\b", "PAN"),
-    (r"\b(pmjay|policy|insurance|insurer id|member id|card no|ayushman|beneficiary|tpa id|scheme id)\b", "INSURANCE"),
+    (r"\b(pmjay|policy|pol no|pol num|insurance|insurer id|member id|card no|ayushman|beneficiary(?! name)|tpa id|scheme id)\b",
+     "INSURANCE"),
     (r"\b(e ?mail|email id|mail)\b", "EMAIL"),
     (r"\b(mobile|phone|contact|mob|cell|tel|telephone|callback|whatsapp|ph no|contact no)\b", "PHONE"),
     (r"\b(uhid|mrn|mr no|mrd|patient ?id|patientid|pid|reg no|regn no|registration no|reg number|cr no|crno|ipd ?no|ip ?no|ipd|admission no|adm no|hospital no|patient ref|patient_ref|hosp id|patient no|case no|bht)\b", "MRN"),
     (r"\b(dob|d o b|date of birth|birth ?date|birthdate|janm tithi|janam tithi|janma tithi|janm|janam|born on)\b", "DOB"),
     (r"\b(age ?sex|age ?gender|age ?/ ?sex)\b", "AGE_SEX"),
     (r"\b(age|umar|umra|umr|aayu|aayu varsh)\b", "AGE"),
-    (r"\b(gender|sex|ling)\b", "GENDER"),
+    (r"\b(gender|sex|ling|linga|lingam)\b|^(m f|f m|m or f)$", "GENDER"),
     (r"\b(pin|pincode|pin code|zip|postal|postcode|post code)\b", "PIN"),
-    (r"\b(village|gaon|gram|mohalla|city|town|basti|locality|ward no|colony|gali)\b", "VILLAGE"),
-    (r"\b(tehsil|taluk|taluka|block|sub ?district|tahsil)\b", "TEHSIL"),
-    (r"\b(district|jila|zila|distt|dist)\b", "DISTRICT"),
+    # Revenue / census vocabulary for settlements, sub-districts and districts across states.
+    (r"\b(village|vill|gaon|gaanv|gram|mauza|mauja|mouza|moza|majra|purwa|kasba|qasba|hamlet|dhani|tola|"
+     r"mohalla|city|town|basti|locality|ward no|colony|gali|panchayat)\b", "VILLAGE"),
+    (r"\b(tehsil|tahsil|taluk|taluka|block|sub ?district|mandal|pargana|vikas ?khand|anchal|circle)\b", "TEHSIL"),
+    (r"\b(district|distt|dist|jila|jilla|zila|zilla|janpad)\b", "DISTRICT"),
     (r"\b(state|rajya)\b", "STATE"),
     (r"\b(address|pata|street|addr|house|residence|line)\b", "ADDRESS"),
     (r"\b(patient name|patient s name|pt name|name of patient|rogi ka naam|mariz ka naam|naam|name|nam|patient|beneficiary name|full name|raised by)\b", "NAME"),
     (r"\b(note|notes|remark|remarks|comment|comments|history|complaint|complaints|advice|description|narrative|details|summary|text)\b", "TEXT"),
-    (r"\b(date|dt|on|tithi|tarikh|time|timestamp|collected|reported|admitted|discharged|visit|registered)\b", "DATE"),
+    (r"\b(date|dt|on|tithi|tarikh|dinank|time|timestamp|collected|reported|admitted|discharged|visit|registered|"
+     r"doa|dod|dos|doe)\b", "DATE"),
 ]
 
 # Devanagari header words.
@@ -174,6 +178,11 @@ DEVA_HEADER = {
     "ग्राम": "VILLAGE", "गांव": "VILLAGE", "गाँव": "VILLAGE", "तहसील": "TEHSIL", "जिला": "DISTRICT",
     "ज़िला": "DISTRICT", "पिन कोड": "PIN", "पिन": "PIN", "मोबाइल": "PHONE", "मोबाइल नं": "PHONE",
     "आधार": "AADHAAR", "पंजीकरण सं": "MRN", "पंजीकरण संख्या": "MRN", "तारीख": "DATE", "दिनांक": "DATE",
+    # settlements, sub-districts, districts (revenue vocabulary)
+    "मौजा": "VILLAGE", "मौज़ा": "VILLAGE", "मजरा": "VILLAGE",
+    "पुरवा": "VILLAGE", "कस्बा": "VILLAGE", "क़स्बा": "VILLAGE",
+    "टोला": "VILLAGE", "ब्लॉक": "TEHSIL", "विकास खंड": "TEHSIL",
+    "परगना": "TEHSIL", "तालुका": "TEHSIL", "जनपद": "DISTRICT",
 }
 
 # JSON / FHIR keys that are never PII containers.

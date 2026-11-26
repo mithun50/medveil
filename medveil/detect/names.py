@@ -239,6 +239,9 @@ _LABELS = [
 _REL = re.compile(r"(?i)(?<![A-Za-z/])(S|D|W|C|B|F|M|Wd|H)\s?/\s?O\b\.?\s*[:\-]?\s*|"
                   r"\b(?:son|daughter|wife|husband|widow|care|baby)\s+of\s+")
 _DEVA_REL = re.compile(r"(?:पुत्र|पुत्री|पत्नी|पति|सुपुत्र|सुपुत्री|पिता)\s*(?:श्री\s*)?")
+_POSSESSIVE_REL = re.compile(r"\b((?:[A-Z][a-z]+\s){0,2}[A-Z][a-z]+)['\u2019]s\s+(?:attendant|wife|husband|son|daughter|"
+                             r"mother|father|brother|sister|guardian|relative|relatives|family|caretaker|bystander|"
+                             r"in-laws?|mother-in-law|father-in-law|nephew|niece|grandson|granddaughter|escort)\b")
 _CHAT = re.compile(r"^\[[^\]\n]{4,40}\]\s*([^:\n]{2,40}):", re.M)
 _REL_BEFORE = re.compile(r"(?i)(?:father|husband|mother|wife|guardian|spouse|relative|attendant|son|daughter)(?:'s)?\s*$|"
                          r"(?:पिता|पति|माता|पत्नी|पिता/पति|अभिभावक)\s*का\s*$")
@@ -248,6 +251,28 @@ _GENERIC_SUFFIX = {"devi", "kumari", "bano", "begum", "khatoon", "khatun", "kaur
 _KINSHIP = {"bhaiya", "bhaiyya", "mama", "mami", "chacha", "chachi", "mausi", "mausa", "kaka", "kaki", "bhabhi",
             "bhabi", "nana", "nani", "dada", "dadi", "tau", "tai", "uncle", "aunty", "auntie", "jija", "bua", "fufa"}
 _ADJ_GAP = re.compile(r"^[\s,;:]*(?:\([^)\n]{0,40}\))?[\s,;:]*(?:(?:mob(?:ile)?|ph(?:one)?|contact|tel|cell|no|call)\.?\s*(?:no\.?)?)?[\s.:\-#]*$", re.I)
+
+
+# Hinglish role and kinship words ("Pita/Pati ka Naam", "Sambandhi ka Naam", "Mareez ka
+# BP"): before ka/ki/ke they name a role, not a person.
+_ROLE_WORDS = frozenset("""
+pita pati mata maa papa patni beta beti bete bahu saas sasur bhai bhaiya behen bahan didi devar jeth
+bhabhi chacha chachi mama mami nana nani dada dadi bua fufa mausa mausi sambandhi rishtedar parijan
+abhibhavak sanrakshak rogi mareez mariz marij patient doctor daktar nurse ghar gaon gram mohalla
+aspatal hospital ward bachcha bachche bacche shishu
+""".split())
+# a label word after ka/ki/ke: "<X> ka Naam / Pata / Umar / Number" is a field label
+_LABEL_AFTER = frozenset("naam nam pata umar umra number no mobile phone janm tithi ling aadhaar".split())
+
+
+def _role_before_postposition(T: "Toks", r: tuple[int, int], i: int) -> bool:
+    words = [T.t[k].text for k in range(r[0], r[1] + 1) if T.t[k].kind == "lat"]
+    if any(_bare(w).lower() in _ROLE_WORDS or "/" in w for w in words):
+        return True
+    # "<X> ka Naam" is a field label unless X is a known name ("Ramesh ka number" is Ramesh)
+    j = T.next_word(i)
+    return (j is not None and _bare(T.t[j].text).lower() in _LABEL_AFTER
+            and not any(is_name_token(_bare(w)) for w in words))
 
 
 def _is_known_word(b: str) -> bool:
@@ -365,7 +390,7 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
                 add(r[0], r[1], "mention", 0.8, "honorific_deva")
         elif tk.kind == "lat" and tk.text in HINDI_POSTPOSITIONS:
             r = T.take_name_back(i, "lat", 2, gazetteer_any_case=True)
-            if r and (i + 2 < len(toks)):
+            if r and (i + 2 < len(toks)) and not _role_before_postposition(T, r, i):
                 add(r[0], r[1], "mention", 0.75, "postposition")
         elif tk.kind == "deva" and tk.text in DEVA_POSTPOSITIONS:
             r = T.take_name_back(i, "deva", 3)
@@ -394,6 +419,18 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             r = T.take_name(j, None, 3, any_case=True)
             if r:
                 add(r[0], r[1], "other", 0.85, "chat_sender")
+    # 4b. a possessive before a relation noun: "Agnes's attendant", "Rohit's wife"
+    for m in _POSSESSIVE_REL.finditer(text):
+        words = m.group(1).split()
+        while words and not is_lat_name_tok(words[0]):
+            words.pop(0)      # "Sample received from" is not part of the name
+        if not words or not all(is_lat_name_tok(w) for w in words):
+            continue
+        s = m.end(1) - len(" ".join(words))
+        if overlaps_protected(prot, s, m.end(1), kinds=("doctor", "org", "eponym", "asha")):
+            continue
+        cands.append(Span(s, m.end(1), "NAME", role="mention", conf=0.8, value=text[s:m.end(1)],
+                          rule="possessive_relation"))
     # 5. a capitalised name right before a phone number
     for ps in phone_spans:
         window_start = max(0, ps.start - 60)
@@ -445,15 +482,18 @@ LANDMARK_NOUN = re.compile(r"(?i)\b(?:mandir|masjid|gurudwara|church|school|vidy
                            r"market|thana|post office|petrol pump|park|station|temple|mosque|talab|pokhar|kuan|tower|"
                            r"dharamshala|panchayat|kotwali|chauraha|pul|bridge|godown|mill)\b")
 LANDMARK_DEVA = re.compile(r"(?:(?<=,)|(?<=^)|(?<=\s))[^,।\n:]{2,30}?\s+के\s+(?:पास|पीछे|सामने|निकट|बगल\s+में)")
-VILLAGE = re.compile(r"\b(?:Vill\.?|Village|Gram|Gaon|Grm\.?|Vil\.?|Gaanv|P\.O\.)\s*[:\-]?\s*(" + _TW + r"(?:\s+" + _TW + r"){0,2})")
-VILLAGE_DEVA = re.compile(r"(?:ग्राम|गांव|गाँव|ग्रा\.|ग्राम\s*पंचायत)\s*[:\-]?\s*((?:[\u0900-\u097F]+)(?:\s+[\u0900-\u097F]+){0,2}?)(?=\s*(?:,|।|\n|$|\s{2}|\s+(?:तहसील|जिला|आयु|पोस्ट)))")
-TEHSIL = re.compile(r"\b(?:Tehsil|Teh\.?|Tahsil|Taluka|Block)\s*[:\-]?\s*(" + _TW + r"(?:\s+" + _TW + r")?)")
-TEHSIL_DEVA = re.compile(r"(?:तहसील|ब्लॉक)\s*[:\-]?\s*([\u0900-\u097F]+)")
+VILLAGE = re.compile(r"\b(?:Vill\.?|Village|Gram|Gaon|Grm\.?|Vil\.?|Gaanv|P\.O\.|Mauza|Mauja|Mouza|Majra|Kasba|Qasba|Hamlet)"
+                     r"\s*[:\-]?\s*(" + _TW + r"(?:\s+" + _TW + r"){0,2})")
+VILLAGE_DEVA = re.compile(r"(?:ग्राम|गांव|गाँव|ग्रा\.|ग्राम\s*पंचायत|मौजा|मौज़ा|मजरा|कस्बा|क़स्बा)\s*[:\-]?\s*((?:[\u0900-\u097F]+)(?:\s+[\u0900-\u097F]+){0,2}?)(?=\s*(?:,|।|\n|$|\s{2}|\s+(?:तहसील|जिला|जनपद|ब्लॉक|आयु|पोस्ट)))")
+TEHSIL = re.compile(r"\b(?:Tehsil|Teh\.?|Tahsil|Taluka|Taluk|Block|Mandal|Pargana|Vikas\s?Khand)\s*[:\-]?\s*("
+                    + _TW + r"(?:\s+" + _TW + r")?)")
+TEHSIL_DEVA = re.compile(r"(?:तहसील|ब्लॉक|विकास\s*खंड|विकासखंड|परगना|तालुका)\s*[:\-]?\s*([\u0900-\u097F]+)")
 PIN_LABEL = re.compile(r"(?i)\b(?:PIN|Pin\s?Code|Pincode|Postal\s?Code|Zip)\s*[:\-]?\s*(\d{6})\b|पिन\s*(?:कोड)?\s*[:\-]?\s*(\d{6})")
-PIN_TAIL = re.compile(r"(?:Distt\.?|District|Dist\.?|जिला|ज़िला)\s+[^\n,;]{2,30}?\s*[-\u2013,]\s*(\d{6})(?!\d)")
+PIN_TAIL = re.compile(r"(?:Distt\.?|District|Dist\.?|Janpad|जिला|ज़िला|जनपद)\s+[^\n,;]{2,30}?\s*[-\u2013,]\s*(\d{6})(?!\d)")
 PIN_BARE = re.compile(r"(?<![\d\-/.])[1-8]\d{5}(?![\d\-/.])")
 ADDR_LINE = re.compile(r"(?im)^.*\b(?:address|addr|residence|resident of|r/o)\b.*$|^.*(?:पता|निवासी).*$")
-ADDR_MARKERS = re.compile(r"(?i)\b(?:H\.?\s?No|House|Makan|Mohalla|Tehsil|Distt|Vill\.?|Gram|near|opp\.)\b|मकान|मोहल्ला|तहसील|जिला|ग्राम")
+ADDR_MARKERS = re.compile(r"(?i)\b(?:H\.?\s?No|House|Makan|Mohalla|Tehsil|Block|Distt|Janpad|Vill\.?|Gram|Mauza|near|opp\.)\b|"
+                          r"मकान|मोहल्ला|तहसील|ब्लॉक|जिला|जनपद|ग्राम|मौजा")
 
 
 def address_ranges(text: str, whole: bool) -> list[tuple[int, int]]:
