@@ -85,6 +85,28 @@ def is_deva_name_tok(t: str) -> bool:
     return len(t) >= 2
 
 
+_NOT_A_NAME = frozenset("not na nil none unknown self same as above below given available applicable mentioned "
+                        "stated known baby infant child n/a".split())
+
+
+# letters with internal hyphens or apostrophes, as the tokenizer keeps them: "anne-marie", "o'brien"
+_ANYCASE_TOK = re.compile(r"[A-Za-z]+(?:['\-][A-Za-z]+)*")
+
+
+def is_lat_name_tok_anycase(t: str) -> bool:
+    """After a strong cue (a label, a relation marker) a word is a name whatever its case:
+    'name: rohit mehra' and 'Name: rOhIt' are as personal as 'Name: Rohit'."""
+    b = _bare(t)
+    lb = b.lower()
+    if len(b) < 2 or not _ANYCASE_TOK.fullmatch(b):
+        return False
+    if lb in LABEL_WORDS or lb in _NOT_A_NAME or is_stopword(lb) or lb in HONORIFIC_POST or lb in HONORIFIC_PRE:
+        return False
+    if not re.search(r"[aeiouy]", lb):
+        return False
+    return True
+
+
 class Toks:
     """Token list with helpers for walking over single spaces."""
 
@@ -111,7 +133,7 @@ class Toks:
                     return None
                 j += 1
                 continue
-            if tk.kind == "p" and allow_colon and tk.text in ":-–=#":
+            if tk.kind == "p" and allow_colon and tk.text in ":-\u2013=#":
                 j += 1
                 continue
             if tk.kind in ("lat", "deva"):
@@ -119,7 +141,8 @@ class Toks:
             return None
         return None
 
-    def take_name(self, j: int | None, script: str | None = None, max_tok: int = 4) -> tuple[int, int] | None:
+    def take_name(self, j: int | None, script: str | None = None, max_tok: int = 4,
+                  any_case: bool = False) -> tuple[int, int] | None:
         """From word index j take a run of name tokens. Returns (first, last) token indices."""
         if j is None:
             return None
@@ -137,7 +160,7 @@ class Toks:
             word = tk.text
             if script == "lat":
                 ok = is_lat_name_tok(word) or (_bare(word).lower() in NAME_PREFIX and count == 0) or \
-                    (re.fullmatch(r"[A-Z]\.", word) is not None)
+                    (re.fullmatch(r"[A-Z]\.", word) is not None) or (any_case and is_lat_name_tok_anycase(word))
             else:
                 ok = is_deva_name_tok(word)
             if not ok:
@@ -157,7 +180,7 @@ class Toks:
             return None
         return first, last
 
-    def take_name_back(self, end_idx: int, script: str, max_tok: int = 3) -> tuple[int, int] | None:
+    def take_name_back(self, end_idx: int, script: str, max_tok: int = 3, gazetteer_any_case: bool = False):
         """Name tokens ending right before token index end_idx (separated by one space)."""
         k = end_idx - 1
         if k < 0 or self.t[k].kind != "ws" or len(self.t[k].text) != 1:
@@ -171,6 +194,9 @@ class Toks:
             if tk.kind != script:
                 break
             ok = is_lat_name_tok(tk.text) if script == "lat" else is_deva_name_tok(tk.text)
+            if not ok and script == "lat" and gazetteer_any_case:
+                # "rohit ji": a lowercase word before an honorific counts if it is a known name
+                ok = is_lat_name_tok_anycase(tk.text) and is_name_token(_bare(tk.text))
             if not ok:
                 if script == "lat" and _bare(tk.text).lower() in NAME_PREFIX and first is not None:
                     first = k
@@ -216,9 +242,36 @@ _DEVA_REL = re.compile(r"(?:पुत्र|पुत्री|पत्नी|�
 _CHAT = re.compile(r"^\[[^\]\n]{4,40}\]\s*([^:\n]{2,40}):", re.M)
 _REL_BEFORE = re.compile(r"(?i)(?:father|husband|mother|wife|guardian|spouse|relative|attendant|son|daughter)(?:'s)?\s*$|"
                          r"(?:पिता|पति|माता|पत्नी|पिता/पति|अभिभावक)\s*का\s*$")
-_NAME_BEFORE_REL = re.compile(r"(?:^|[\n.:;|]\s*|\s)((?:[A-Z][a-z]+\.? ){0,2}[A-Z][a-z]+),?\s*$")
+_NAME_BEFORE_REL = re.compile(r"(?:^|[\n.:;|]\s*|\s)((?:[A-Za-z][A-Za-z]+\.? ){0,2}[A-Za-z][A-Za-z]+),?\s*$")
 _GENERIC_SUFFIX = {"devi", "kumari", "bano", "begum", "khatoon", "khatun", "kaur", "bibi", "begam"}
+# Kinship words that are part of how a relative is named ("Kamal Bhaiya", "Akram Mama").
+_KINSHIP = {"bhaiya", "bhaiyya", "mama", "mami", "chacha", "chachi", "mausi", "mausa", "kaka", "kaki", "bhabhi",
+            "bhabi", "nana", "nani", "dada", "dadi", "tau", "tai", "uncle", "aunty", "auntie", "jija", "bua", "fufa"}
 _ADJ_GAP = re.compile(r"^[\s,;:]*(?:\([^)\n]{0,40}\))?[\s,;:]*(?:(?:mob(?:ile)?|ph(?:one)?|contact|tel|cell|no|call)\.?\s*(?:no\.?)?)?[\s.:\-#]*$", re.I)
+
+
+def _is_known_word(b: str) -> bool:
+    """A gazetteer name, or a hyphen/apostrophe compound whose parts of 2+ letters all are
+    ("mary-ann", "ram-prasad")."""
+    if is_name_token(b):
+        return True
+    parts = [x for x in re.split(r"['\-]", b) if len(x) >= 2]
+    return len(parts) > 1 and all(is_name_token(x) for x in parts)
+
+
+def _known_run(T: Toks, r: tuple[int, int] | None) -> tuple[int, int] | None:
+    """The leading tokens of run r that are known given names or surnames, or None."""
+    if r is None:
+        return None
+    last = None
+    for k in range(r[0], r[1] + 1):
+        tk = T.t[k]
+        if tk.kind == "ws":
+            continue
+        if tk.kind != "lat" or not _is_known_word(_bare(tk.text)):
+            break
+        last = k
+    return (r[0], last) if last is not None else None
 
 
 def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
@@ -240,6 +293,10 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             return
         if overlaps_protected(prot, s, e, kinds=("doctor", "org", "eponym", "asha", "drugdose", "history", "complaint")):
             return
+        # "Kamal Bhaiya": the kinship word after a name is part of the relative's name
+        km = re.match(r" ([A-Za-z]+)\b", text[e:e + 12])
+        if km and km.group(1).lower() in _KINSHIP:
+            e += km.end()
         cands.append(Span(s, e, "NAME", role=role, conf=conf, value=text[s:e], rule=rule))
 
     # 1. labels (a bare "Name:" or "नाम:" right after a relative word belongs to the relative)
@@ -250,19 +307,30 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             j = idx_at(m.end())
             if j is None or toks[j].kind not in ("lat", "deva"):
                 continue
-            r = T.take_name(j)
+            # Any letter case only after an explicit separator ("name: rohit mehra"); "report of"
+            # or "reported by" without one is often followed by clinical words. A bare "Patient:"
+            # is often followed by a complaint, so there lowercase words count only while they
+            # are known given names or surnames ("Patient: rohit mehra", not "Patient: fever").
+            bare = re.sub(r"[\s:\-=]+$", "", m.group(0)).strip().lower().rstrip(".")
+            sep = re.search(r"[:\-=]\s*$", m.group(0)) is not None
+            if bare in ("patient", "pt"):
+                # the longer of the capitalised run and the known-name run ("Rohit mehra")
+                cands_r = [x for x in (T.take_name(j), _known_run(T, T.take_name(j, any_case=True))) if x]
+                r = max(cands_r, key=lambda x: x[1]) if cands_r else None
+            else:
+                r = T.take_name(j, any_case=sep)
             if r:
                 add(r[0], r[1], role, 0.95, "label")
     # 2. relation markers
     for m in _REL.finditer(text):
         g = (m.group(1) or "").upper()
         if g in ("S", "D", "W", "B", "WD"):
-            # "Asha, W/o Kamal": the name before the marker is the patient
+            # "Asha, W/o Kamal": the name before the marker is the patient (any letter case)
             bm = _NAME_BEFORE_REL.search(text[max(0, m.start() - 60):m.start()])
             if bm:
                 a = idx_at(max(0, m.start() - 60) + bm.start(1))
                 if a is not None:
-                    r = T.take_name(a, "lat", 4)
+                    r = T.take_name(a, "lat", 4, any_case=True)
                     if r and T.t[r[1]].e <= m.start():
                         add(r[0], r[1], "patient", 0.85, "before_relation")
         if g == "C" and co_is_complaint(text, m.end()):
@@ -275,7 +343,7 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
         j = idx_at(m.end())
         if j is None:
             continue
-        r = T.take_name(j)
+        r = T.take_name(j, any_case=True)
         if r:
             add(r[0], r[1], "relative", 0.95, "relation")
     for m in _DEVA_REL.finditer(text):
@@ -288,7 +356,7 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
     for i, tk in enumerate(toks):
         low = _bare(tk.text).lower()
         if tk.kind == "lat" and low in HONORIFIC_POST:
-            r = T.take_name_back(i, "lat")
+            r = T.take_name_back(i, "lat", gazetteer_any_case=True)
             if r:
                 add(r[0], r[1], "mention", 0.85, "honorific")
         elif tk.kind == "deva" and tk.text in HONORIFIC_POST_DEVA:
@@ -296,7 +364,7 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             if r:
                 add(r[0], r[1], "mention", 0.8, "honorific_deva")
         elif tk.kind == "lat" and tk.text in HINDI_POSTPOSITIONS:
-            r = T.take_name_back(i, "lat", 2)
+            r = T.take_name_back(i, "lat", 2, gazetteer_any_case=True)
             if r and (i + 2 < len(toks)):
                 add(r[0], r[1], "mention", 0.75, "postposition")
         elif tk.kind == "deva" and tk.text in DEVA_POSTPOSITIONS:
@@ -323,7 +391,7 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
     for m in _CHAT.finditer(text):
         j = idx_at(m.start(1))
         if j is not None:
-            r = T.take_name(j, None, 3)
+            r = T.take_name(j, None, 3, any_case=True)
             if r:
                 add(r[0], r[1], "other", 0.85, "chat_sender")
     # 5. a capitalised name right before a phone number
@@ -382,7 +450,7 @@ VILLAGE_DEVA = re.compile(r"(?:ग्राम|गांव|गाँव|ग्�
 TEHSIL = re.compile(r"\b(?:Tehsil|Teh\.?|Tahsil|Taluka|Block)\s*[:\-]?\s*(" + _TW + r"(?:\s+" + _TW + r")?)")
 TEHSIL_DEVA = re.compile(r"(?:तहसील|ब्लॉक)\s*[:\-]?\s*([\u0900-\u097F]+)")
 PIN_LABEL = re.compile(r"(?i)\b(?:PIN|Pin\s?Code|Pincode|Postal\s?Code|Zip)\s*[:\-]?\s*(\d{6})\b|पिन\s*(?:कोड)?\s*[:\-]?\s*(\d{6})")
-PIN_TAIL = re.compile(r"(?:Distt\.?|District|Dist\.?|जिला|ज़िला)\s+[^\n,;]{2,30}?\s*[-–,]\s*(\d{6})(?!\d)")
+PIN_TAIL = re.compile(r"(?:Distt\.?|District|Dist\.?|जिला|ज़िला)\s+[^\n,;]{2,30}?\s*[-\u2013,]\s*(\d{6})(?!\d)")
 PIN_BARE = re.compile(r"(?<![\d\-/.])[1-8]\d{5}(?![\d\-/.])")
 ADDR_LINE = re.compile(r"(?im)^.*\b(?:address|addr|residence|resident of|r/o)\b.*$|^.*(?:पता|निवासी).*$")
 ADDR_MARKERS = re.compile(r"(?i)\b(?:H\.?\s?No|House|Makan|Mohalla|Tehsil|Distt|Vill\.?|Gram|near|opp\.)\b|मकान|मोहल्ला|तहसील|जिला|ग्राम")

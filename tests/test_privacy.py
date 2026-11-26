@@ -1,9 +1,11 @@
 import datetime as dt
 
+import pytest
+
 from medveil.crypto import LETTERS, Keys
 from medveil.privacy import _aligned, plan_bands, shift_date
 from medveil.rare import RareValues, chapter
-from medveil.model import Doc, Record, Slot
+from medveil.model import Doc, Record, Slot, Span
 
 POLICY = {"age": {"ladder": [10, 20], "top_code": 80, "k_patients": 2},
           "location": {"k_patients": 2, "fallback_level": "state"}, "_division_of": {}}
@@ -85,3 +87,107 @@ def test_eponym_diagnosis_kept_even_if_rare():
     rv.plan({0: "p0"})
     assert "E83.0" not in rv.rare_codes
     assert not rv.apply(0, recs[0][1])
+
+
+# ---------------------------------------------------------------- review findings, PR #3
+
+def _collect(texts):
+    recs = [(Doc(rel=f"r{i}", sha256="0"), _rec(x)) for i, x in enumerate(texts)]
+    rv = RareValues(2)
+    rv.collect(recs)
+    return rv, recs
+
+
+def test_uppercase_procedure_label_is_collected():
+    rv, _ = _collect(["PROCEDURE: ventricular assist device implantation."])
+    assert "ventricular assist device implantation" in rv.procs
+
+
+def test_rare_diagnosis_mention_far_into_a_long_note_is_found():
+    rv, _ = _collect(["Diagnosis: Visceral leishmaniasis (B55.0)",
+                      "x " * 120_000 + "Treated for visceral leishmaniasis, improving."])
+    assert "B55.0" in rv.rec_codes[1]
+
+
+def test_long_diagnosis_display_is_generalized_whole():
+    # Within DIAG_WITH_CODE's limits (90 + parenthesis of up to 30 + 60) but longer than
+    # the 160-character window the display search used to look at.
+    head = "Chronic visceral leishmaniasis with marked splenomegaly and pancytopenia in a migrant man "
+    display = head + "(post kala-azar dermal form)" + " with secondary bacterial infection of all the skin lesions"
+    assert len(head) <= 90 and len(display) > 160
+    rv, recs = _collect(["Diagnosis: " + display + " (B55.0)"])
+    rv.plan({0: "p0"})
+    assert rv.apply(0, recs[0][1])
+    out = recs[0][1].slots[0].out
+    assert out == "Diagnosis: Certain infectious and parasitic diseases (A00-B99)", out
+
+
+def _dob_ctx(mode):
+    from medveil.rewrite import Ctx
+    return Ctx(psn="PSN-ABCDEFGH", rec_token="t", shift=40, band=None, top=80, district=None, dob_mode=mode)
+
+
+def test_structured_dob_in_shift_mode_keeps_only_the_dates():
+    from medveil.rewrite import replacement
+    text = "12/03/1980, Ramesh Kumar, 9876543210"
+    sl = Slot(path=(0, 1), text=text, ftype="DOB", kind="value")
+    out = replacement(Span(0, len(text), "DOB"), sl, _dob_ctx("shift"), structured=True)
+    assert out == "21/04/1980", out
+    two = "12/03/1980 or 13/03/1980"       # one valid date out, never a joined list
+    sl2 = Slot(path=(0, 1), text=two, ftype="DOB", kind="value")
+    assert replacement(Span(0, len(two), "DOB"), sl2, _dob_ctx("shift"), structured=True) == "21/04/1980"
+    assert replacement(Span(0, len(text), "DOB"), sl, _dob_ctx("suppress"), structured=True) == ""
+
+
+def test_fhir_birthdate_with_spaces_is_dropped_not_left_blank():
+    import json
+    from medveil.detect.fields import classify_header, classify_key
+    from medveil.ingest import build_slots, sniff_and_parse
+    from medveil.policy import DEFAULTS
+    from medveil.rewrite import serialize
+    bundle = {"resourceType": "Bundle", "type": "collection", "entry": [{"resource": {
+        "resourceType": "Patient", "id": "p1", "gender": "male", "birthDate": " 1980-03-12 "}}]}
+    doc = Doc(rel="fhir/b.json", sha256="0")
+    sniff_and_parse(doc, json.dumps(bundle).encode(), DEFAULTS)
+    build_slots(doc, classify_header, classify_key)
+    from medveil.detect.engine import Knowledge, detect_slot
+    from medveil.rewrite import rewrite_record
+    dob = [sl for r in doc.records for sl in r.slots if sl.ftype == "DOB"]
+    assert dob, "birthDate must be typed as DOB for this test to mean anything"
+    k = Knowledge()
+    k.finalize()
+    for rec in doc.records:              # the real path: detect, then rewrite with suppress
+        for sl in rec.slots:
+            detect_slot(sl, k, doc)
+        rewrite_record(rec, _dob_ctx("suppress"))
+    assert all(isinstance(sl.out, str) and not sl.out.strip() for sl in dob), [sl.out for sl in dob]
+    assert "birthDate" not in serialize(doc)
+
+
+def test_unknown_dob_mode_falls_back_to_suppress(tmp_path):
+    from medveil.policy import load
+    p = tmp_path / "policy.yaml"
+    p.write_text("dob:\n  mode: year\n", encoding="utf-8")
+    assert load(p)["dob"]["mode"] == "suppress"
+    p.write_text("dob:\n  mode: shift\n", encoding="utf-8")
+    assert load(p)["dob"]["mode"] == "shift"
+
+
+
+@pytest.mark.parametrize("ws", [" ", "\u2028", "\u0085", "\u3000"])
+def test_long_whitespace_before_a_code_does_not_hide_the_diagnosis(ws):
+    rv, recs = _collect(["Diagnosis: Visceral leishmaniasis" + ws * 400 + "(B55.0)"])
+    assert rv.displays.get("B55.0"), "display lost behind the whitespace run"
+
+
+def test_rare_value_matching_worst_case_is_fast():
+    # Every variant's words occur in one 2 MB note, so the word prefilter cannot skip any.
+    import time
+    words = ["w%03d" % i for i in range(300)]
+    texts = ["Diagnosis: %s %s disease (A%02d.0)" % (words[i], words[i + 1], i % 99) for i in range(0, 298, 2)]
+    big = (" ".join(words) + " ") * (2_000_000 // 2400)
+    recs = [(Doc(rel=f"r{i}", sha256="0"), _rec(x)) for i, x in enumerate(texts + [big])]
+    rv = RareValues(2)
+    t0 = time.perf_counter()
+    rv.collect(recs)
+    assert time.perf_counter() - t0 < 5.0

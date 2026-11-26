@@ -47,6 +47,12 @@ jobs:
           python tools/ci_gate.py --input chaos/7/input --truth chaos/7/truth/truth.json
           python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 11 --variants names,headers,ids
           python tools/ci_gate.py --input chaos/11/input --truth chaos/11/truth/truth.json
+      - name: Adversarial set (tweaked PII, encoded payloads, hostile files) must not leak
+        working-directory: medveil
+        run: |
+          python tools/adversarial_gen.py --kit ../Secret-Wards-ToolKit --out adv --seed 3
+          RAKSHA_SECRET=ci python main.py --input adv/3/input --output out_adv
+          python tools/adversarial_gen.py --verify out_adv --truth adv/3/truth/truth.json --input adv/3/input
       - name: Organizers' pre-submit check (3 runs)
         working-directory: medveil
         run: python ../Secret-Wards-ToolKit/check_submission.py --repo . --run

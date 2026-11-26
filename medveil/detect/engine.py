@@ -12,7 +12,8 @@ from collections import defaultdict
 from functools import lru_cache
 
 from ..lexicon import GENERIC_NAME_TOKENS, HONORIFIC_PRE, NAME_PREFIX, SAFE_KEYS, district_of, is_given, is_stopword
-from ..model import Doc, Slot, Span
+from ..model import PII_TYPES, Doc, Slot, Span
+from ..textnorm import encoded_payloads, normalize
 from ..translit import key, tokens_match
 from .dates import find_dates, order_evidence
 from .names import find_address, find_names, is_lat_name_tok
@@ -26,13 +27,25 @@ _DEVA = re.compile(r"[\u0900-\u097F]")
 _PLAIN_KEY = re.compile(r"[a-z_][a-z0-9_]*(?:[A-Z][a-z0-9_]*)*")
 _HAS_UP = re.compile(r"[A-Z]")
 _HAS_DG = re.compile(r"\d")
+_CHUNK_OVER = 32_768        # slots longer than this are detected chunk by chunk
+_CHUNK_LEN = 4_096          # target chunk size; cuts only at a newline or whitespace
+_CHUNK_MARGIN = 256         # each chunk is detected with this much context on both sides
+_WS = re.compile(r"\s")
+# lowercase text still gets name detection when a strong cue is present ("name: rohit mehra")
+# Lowercase text only reaches find_names when one of these cues is present, so every label
+# find_names accepts (names._LABELS, relation markers, honorifics) must be listed here.
+_NAME_CUE = re.compile(r"(?i)\b(?:name|naam|patient|pt|attendant|guardian|relative|husband|father|wife|mother|"
+                       r"spouse|nok|next of kin|informant|contact person|escort|bystander|beneficiary|rogi|"
+                       r"mareez|mariz|[a-z]+ by|handed over to|report of|son of|daughter of|wife of|husband of|"
+                       r"widow of|care of|baby of|[sdwcbfmh]\s?/\s?o|wd\s?/\s?o|ji|sahab|bhai|behenji|didi|amma|"
+                       r"smt|shri|mr|mrs)\b|\b[a-z]+ (?:ka|ki|ke|ko|ne) ")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 _DOB_CUE = re.compile(r"(?i)(?:\bD\.?\s?O\.?\s?B\.?|date\s+of\s+birth|birth\s*date|\bborn\b|जन्म(?:\s*तिथि)?|janm)\W{0,6}$")
 _REL_PREFIX = re.compile(r"^\s*(?:(?:S|D|W|C|B|H|F|M|Wd)\s?/\s?O\.?|son of|daughter of|wife of|husband of|care of|"
                          r"पुत्र|पुत्री|पत्नी|पति)\s*[:\-]?\s*(?:श्री\s*)?", re.I)
 _TITLE_PREFIX = re.compile(r"^\s*(?:(?:Mr|Mrs|Ms|Smt|Shri|Sri|Km|Miss|Late|Master|Baby)\.?\s+|श्री\s+|श्रीमती\s+)", re.I)
 
-STRONG_PRIORITY = {"ABHA": 0, "AADHAAR": 1, "AADHAAR_MASKED": 1, "PHONE": 2, "EMAIL": 3, "ABHA_ADDR": 3, "PAN": 3,
+STRONG_PRIORITY = {"ENCODED": -1, "ABHA": 0, "AADHAAR": 1, "AADHAAR_MASKED": 1, "PHONE": 2, "EMAIL": 3, "ABHA_ADDR": 3, "PAN": 3,
                    "INSURANCE": 3, "MRN": 4, "DOB": 5, "NAME": 6, "HOUSE": 7, "LOCALITY": 7, "LANDMARK": 7,
                    "VILLAGE": 7, "TEHSIL": 7, "PIN": 7, "ADDRESS": 7, "DATE": 8, "AGE": 9}
 
@@ -262,6 +275,11 @@ def _known_village_spans(text: str, K: Knowledge, prot) -> list[Span]:
 
 def _known_id_spans(text: str, K: Knowledge) -> list[Span]:
     out = []
+    # digits with a separator between every digit ("2 0 2 6 0 0 4 6 1") hide a known ID core
+    for m in re.finditer(r"(?<![\dA-Za-z])\d(?:[ .\-]\d){4,}(?![\dA-Za-z])", text):
+        d = re.sub(r"\D", "", m.group(0))
+        if any(c in d for c in K.shapes.cores) or d in K.phones:
+            out.append(Span(m.start(), m.end(), "MRN", value=None, rule="spaced_id"))
     for m in re.finditer(r"(?<![\dA-Za-z])\d{5,}(?![\dA-Za-z])", text):
         d = m.group(0)
         before = text[m.start() - 1:m.start()] if m.start() else ""
@@ -290,9 +308,12 @@ def resolve(spans: list[Span]) -> list[Span]:
     return chosen
 
 
-def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> None:
+def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _depth: int = 0) -> None:
     text = sl.text
     if not text or not text.strip() or text.lower() in ("null", "none"):
+        return
+    if len(text) > _CHUNK_OVER and sl.ftype in (None, "TEXT", "ADDRESS") and not sl.number and _depth == 0:
+        _detect_chunked(sl, K, doc, file_level)
         return
     # Plain programmatic JSON keys ("resourceType", "visit_date") cannot hold personal data,
     # unless one of their parts is a known given name ("zainab_siddiqui").
@@ -379,6 +400,13 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> N
     prot = protected_spans(view) if (has_upper or ft == "ADDRESS" or "/" in view) else []
     sl.protected = prot
     order = doc.date_order
+    # Base64 or hex runs hiding personal data inside free text are replaced as a whole.
+    if len(view) >= 16 and _depth < 3:
+        for s, e, dec in encoded_payloads(view):
+            sub = Slot(path=(), text=normalize(dec), ftype="TEXT", kind="value")
+            detect_slot(sub, K, doc, file_level, _depth + 1)
+            if any(sp.etype in PII_TYPES for sp in sub.spans):
+                spans.append(Span(s, e, "ENCODED", value=None, rule="encoded_payload"))
     safe_clinical = (ft is None and sl.kind == "value" and sl.key.lower() in SAFE_KEYS and len(view) < 60)
     ids = find_ids(view, K.shapes) if has_digit or "@" in view else []
     spans.extend(ids)
@@ -395,7 +423,7 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> N
         return
     if has_digit:
         spans.extend(find_ages(view))
-    if has_upper:
+    if has_upper or _NAME_CUE.search(view):
         names = find_names(view, prot, phones)
         spans.extend(names)
         spans.extend(_known_name_spans(view, K, prot))
@@ -405,6 +433,75 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> N
     if file_level and has_upper:
         spans.extend(_aggressive_names(view, prot, any(s.etype in ("MRN", "PHONE") for s in ids)))
     sl.spans = resolve(spans)
+
+
+def _chunks(text: str):
+    """Split at newlines; split long lines at the last whitespace before _CHUNK_LEN.
+    A run without whitespace (a base64 blob) stays whole so it can still be decoded."""
+    pos = 0
+    n = len(text)
+    while pos < n:
+        end = min(n, pos + _CHUNK_LEN)
+        if end < n:
+            nl = text.rfind("\n", pos, end)
+            if nl > pos:
+                end = nl + 1
+            else:
+                ws = max(text.rfind(" ", pos, end), text.rfind("\t", pos, end))
+                if ws > pos:
+                    end = ws + 1
+                else:
+                    m = re.compile(r"\s").search(text, end)
+                    end = m.end() if m else n
+        yield pos, text[pos:end]
+        pos = end
+
+
+def _detect_chunked(sl: Slot, K: Knowledge, doc: Doc, file_level: bool) -> None:
+    """Detection for very long text in chunks. Identical chunks (degenerate or repeated
+    content) are detected once, which keeps hostile inputs like 'Dr. ' * 300000 linear.
+
+    Each chunk is detected with context on both sides: up to 256 characters before it and
+    256 after it, both cut at whitespace. So a spaced phone number cut by the boundary is
+    matched whole, a name whose label ("Name:", "Dr.") ends the previous chunk keeps its
+    cue, and a doctor's title still protects the name after it. A span belongs to the chunk
+    it starts in; a span that starts inside one already taken is dropped."""
+    text = sl.text
+    n = len(text)
+    cache: dict[tuple[str, str, str], tuple[list, list]] = {}
+    spans: list[Span] = []
+    prot: list = []
+    taken_until = 0
+    for off, chunk in _chunks(text):
+        end = off + len(chunk)
+        tail = lead = ""
+        if end < n:
+            m_end = min(n, end + _CHUNK_MARGIN)
+            ws = _WS.search(text, m_end, min(n, m_end + _CHUNK_LEN))
+            tail = text[end:(ws.start() if ws else m_end)]
+        if off > 0:
+            ws = _WS.search(text, max(0, off - _CHUNK_MARGIN), off)
+            lead = text[ws.end():off] if ws else ""
+        key = (lead, chunk, tail)
+        hit = cache.get(key)
+        if hit is None:
+            sub = Slot(path=sl.path, text=lead + chunk + tail, ftype=sl.ftype, key=sl.key, kind=sl.kind)
+            detect_slot(sub, K, doc, file_level, 1)
+            hit = (sub.spans, sub.protected)
+            if len(cache) < 4096:
+                cache[key] = hit
+        lo, hi = len(lead), len(lead) + len(chunk)
+        base = off - lo
+        for sp in hit[0]:
+            if not lo <= sp.start < hi or sp.start + base < taken_until:
+                continue
+            spans.append(Span(sp.start + base, sp.end + base, sp.etype, sp.role, sp.value, sp.conf, sp.rule))
+            taken_until = max(taken_until, sp.end + base)
+        for s, e, k in hit[1]:
+            if e > lo and s < hi:
+                prot.append((max(s, lo) + base, e + base, k))
+    sl.spans = spans
+    sl.protected = prot
 
 
 def _aggressive_names(text: str, prot, has_id: bool = False) -> list[Span]:

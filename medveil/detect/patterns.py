@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from ..lexicon import COMPLAINT_WORDS, DRUGS
+from ..lexicon import COMPLAINT_WORDS, DRUGS, is_name_token
 from ..model import Span
 
 # --------------------------------------------------------------------------- protect
@@ -70,17 +70,35 @@ _CO = re.compile(r"\bC\s?/\s?O\b\.?\s*[:\-]?\s*", re.I)
 _WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*|[\u0900-\u097F]+")
 
 
+# Hinglish body parts and complaint words seen after "C/O" ("C/O gala kharab", "C/O kaan dard").
+# Kept local: some ("gala", "kaan") are also surnames, so they must not become stopwords.
+_CO_HINGLISH = frozenset("""
+gala gale kaan kan kamar ghutna ghutne aankh aankhon ankh daant dant sar sir pet seena chhati chati
+naak nak haath hath pair pairon pao paon pith peeth gardan jodon jod sardi jukam zukam khansi saans
+kamzori jalan sujan sujaan khujli ulti dast bukhar chakkar peshab pesab ghabrahat bechaini
+""".split())
+_CO_TAIL = frozenset("dard kharab kharash pain ache aching swelling sujan jalan mein me se bhari".split())
+
+
 def co_is_complaint(text: str, pos: int) -> bool:
     """True if the words after a C/O at `pos` describe a complaint, not a person."""
     m = _WORD.search(text, pos, min(len(text), pos + 60))
     if not m:
         return True  # "C/O:" followed by nothing useful
     w = m.group(0)
-    if w.lower() in COMPLAINT_WORDS or w.lower() in ("no", "known", "h", "k", "pain", "fever"):
+    lw = w.lower()
+    if lw in COMPLAINT_WORDS or lw in ("no", "known", "h", "k", "pain", "fever"):
         return True
     if re.match(r"[\u0900-\u097F]", w):
         from ..lexicon import HINDI_COMMON
         return w in HINDI_COMMON
+    if w.islower():
+        nxt = _WORD.match(text, m.end() + 1) if text[m.end():m.end() + 1] == " " else None
+        if lw in _CO_HINGLISH or (nxt is not None and nxt.group(0).lower() in _CO_TAIL):
+            return True
+    # "C/O rAmEsH": odd casing or a known name after C/O is a person, not a complaint
+    if any(c.isupper() for c in w[1:]) or is_name_token(w):
+        return False
     return w[0].islower()
 
 
@@ -126,8 +144,8 @@ def overlaps_protected(prot, s: int, e: int, kinds=None) -> bool:
 # --------------------------------------------------------------------------- identifiers
 EMAIL = re.compile(r"(?<![\w.+\-])[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 ABHA_ADDR = re.compile(r"(?<![\w.])[A-Za-z0-9._]{3,}@(?:abdm|sbx|ndhm|abha)\b", re.I)
-ABHA = re.compile(r"(?<![\w\-/+])\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
-AADHAAR = re.compile(r"(?<![\w\-/+])\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
+ABHA = re.compile(r"(?<![\w\-/+])(?:\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|\d(?:[ .\-]\d){13})(?![\w\-/])")
+AADHAAR = re.compile(r"(?<![\w\-/+])(?:\d{4}[\s\-]?\d{4}[\s\-]?\d{4}|\d(?:[ .\-]\d){11})(?![\w\-/])")
 AADHAAR_MASKED = re.compile(r"(?<![\w])(?:[Xx*•]{4}[\s\-]?[Xx*•]{4}[\s\-]?\d{4}|[Xx*]{8}\d{4})(?![\w])")
 PAN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3}[PCHFATBLJGpchfatbljg][A-Za-z]\d{4}[A-Za-z](?![A-Za-z0-9])")
 INSURANCE = re.compile(r"(?<![A-Za-z0-9])(?:PMJAY|PM-JAY|ABPMJAY|AB-PMJAY)[\s\-/]?[A-Z]{0,3}[\s\-/]?\d{6,14}(?![A-Za-z0-9])"

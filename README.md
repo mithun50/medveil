@@ -11,13 +11,21 @@ quasi-identifiers an attacker with a voter list would use.
 
 | Measured on | PII leaked | Canaries | Medical values kept | Linking precision / recall | Wrong merges | Est. attack risk |
 |---|---:|---:|---:|---|---:|---:|
-| practice data (`dev/`) | 0 of 3,230 | 0 of 4 | 97.8% | 1.00 / 1.00 | 0 | 0.109 |
-| held-out chaos set, seed 7 | 0 of 3,234 | 0 of 8 | 97.9% | 1.00 / 1.00 | 0 | |
-| held-out chaos set, seed 11 | 0 of 3,230 | 0 of 4 | 98.1% | 1.00 / 1.00 | 0 | |
+| practice data (`dev/`) | 0 of 3,230 | 0 of 4 | 97.7% | 1.00 / 1.00 | 0 | 0.102 |
+| held-out chaos set, seed 7 | 0 of 3,234 | 0 of 8 | 97.7% | 1.00 / 1.00 | 0 | |
+| held-out chaos set, seed 11 | 0 of 3,230 | 0 of 4 | 97.9% | 1.00 / 1.00 | 0 | |
+| adversarial set, seed 3 (tweaked PII, encoded payloads, 27 hostile files) | 0 of 3,245 | 0 of 8 | 97.7% | 1.00 / 0.99 | 0 | |
 
 "Chaos sets" are our own rewrites of the practice data with new patient names, labels,
-headers, ID, date and phone formats and new canaries (`tools/chaos_gen.py`). Attack risk is
-from our re-implementation of the organizers' attacks A1 to A7 (`tools/redteam.py`). The
+headers, ID, date and phone formats and new canaries (`tools/chaos_gen.py`). The adversarial
+set (`tools/adversarial_gen.py`) tweaks 1,043 PII mentions so they look different but
+normalize back to the original, wraps PII in encodings and adds hostile files (see
+[Robustness](#robustness-against-tweaked-and-hostile-input)). Attack risk is from our
+re-implementation of the organizers' attacks A1 to A7 (`tools/redteam.py`).
+
+Our estimate of the official score on the practice data is **95.93 of 100**
+(`tools/scorecard.py`, a re-implementation of `scoring.toml`). On the published baselines it
+gives -19.74 for passthrough (official -19.48) and 22.61 for redact-all (official 22.75). The
 starter skeleton, for comparison, leaks 84.1% of personal data and links nobody.
 
 ---
@@ -49,10 +57,14 @@ Development:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                                             # 84 tests
+python -m pytest -q                                             # 255 tests
 python tools/ci_gate.py --input ../Secret-Wards-ToolKit/dev/input --truth ../Secret-Wards-ToolKit/dev/truth/truth.json
 python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 7
+python tools/adversarial_gen.py --kit ../Secret-Wards-ToolKit --out adv --seed 3
+python tools/adversarial_gen.py --verify <out> --truth adv/3/truth/truth.json --input adv/3/input
 python tools/redteam.py --output <out> --other <out made with another secret>
+python tools/scorecard.py --output <out> --repeat <same secret again> --other <another secret> \
+    --input ../Secret-Wards-ToolKit/dev/input --truth ../Secret-Wards-ToolKit/dev/truth/truth.json
 python tools/sweep.py                                           # privacy versus utility per policy variant
 ```
 
@@ -97,16 +109,29 @@ first.
   neither clean UTF-8 nor clean cp1252 (mojibake, corrupt bytes) is quarantined.
 - JSON depth is checked with a linear scan before parsing (limit 200), so a 1,500-deep file is
   quarantined without recursion or memory spikes.
-- Binary (PDF, JPEG, PNG, ZIP...), markup (XML, HTML), empty files, truncated JSON and JSON
-  behind a `.csv` extension are quarantined with an enum reason code. Nothing unprocessed is
-  ever copied into `sanitized/`.
+- Binary (PDF, JPEG, PNG, ZIP, gzip, 7z, RAR, ELF and PE executables, Mach-O, SQLite,
+  WebAssembly...), markup (XML, HTML, a text file that starts with a tag), empty files,
+  truncated JSON, JSON with `NaN`, `Infinity` or out-of-range numbers, and JSON behind a `.csv`
+  extension are quarantined with an enum reason code. Nothing unprocessed is ever copied into
+  `sanitized/`.
+- Symlinks are never parsed or copied (reason `symlink`); the target is read only to compute
+  the SHA-256 that `report.json` lists. FIFOs, sockets and devices are quarantined as
+  `special_file` without being opened.
 - Every document becomes records (`row:N`, JSON pointers such as `/visits/3`, or `doc`) made
   of slots: each CSV cell, JSON leaf, JSON key, CSV header, the file name, or a whole note.
 
 ### Detection (`medveil/detect/`)
-Runs per slot on a normalized view: NFKC, zero-width characters removed, Cyrillic and Greek
-homoglyphs folded, Indic digits to ASCII, `\uXXXX`, HTML entities, %-encoding and base64
-decoded. The scorer normalizes the same way, so a disguised name cannot slip through.
+Runs per slot on a normalized view: NFKC, zero-width, bidi and other invisible characters
+removed, Cyrillic and Greek homoglyphs folded, Latin diacritics stripped, every Unicode dash
+to `-`, Indic, Arabic-Indic and full-width digits to ASCII, `\uXXXX`, HTML entities,
+%-encoding and base64 decoded. The scorer normalizes the same way, so a disguised name cannot
+slip through. Text longer than 32 KB is detected in chunks of about 4 KB, cut at whitespace.
+Each chunk is detected inside a window that adds up to 256 characters before it (cut at
+whitespace) and 256 after it (extended to the next whitespace), so a spaced phone number cut
+by the boundary is found whole and a label or a doctor's title ending the previous chunk still
+applies. Identical windows are detected once; the cache holds up to 4,096 of them. A run with no whitespace at all (a base64 blob) is never cut, so it can still be decoded;
+there the cost depends on the patterns staying linear on that run, which the 2 MB probes below
+check.
 
 1. **Protect layer** first: doctors (`Dr. ...`, doctor fields, FHIR Practitioner), drugs and
    doses (`Dolo 650`, `5 mg`), frequencies (`1-0-1`, `BD x 5 days`), vitals, labs with units,
@@ -132,6 +157,14 @@ decoded. The scorer normalizes the same way, so a disguised name cannot slip thr
    right before a phone number (how canaries are caught), and gazetteer given+surname pairs.
 6. **Addresses**: house, mohalla, landmark (`near Pani Tanki`, `के पीछे`), village, tehsil, PIN,
    in Latin and Devanagari, plus known villages and PINs from structured fields.
+7. **Encoded payloads**: base64 and hex runs in free text are decoded (up to 3 nested levels).
+   If the decoded content holds PII, the whole run becomes `[ENCODED-PII-REMOVED]`; runs that
+   decode to nothing personal are left alone.
+
+Names are matched in any case after a strong cue (a label, a relation marker, an honorific
+with a gazetteer hit), so `name: rohit mehra` and `S/O RAJESH KUMAR` are found. A bare
+`Patient:` followed by lowercase words is not treated as a name, because it is usually a
+complaint.
 
 The name gazetteers (Faker `en_IN`/`hi_IN`, MIT, plus our own list) only raise confidence.
 Context finds names that are in no list, which is what the canaries test.
@@ -192,17 +225,61 @@ the memory of a running process.
 - **No network.** `socket.connect`, `create_connection` and `getaddrinfo` raise.
 - **Input is read-only.** Files are opened `rb`; the run refuses an output folder inside the input.
 
+## Robustness against tweaked and hostile input
+
+An evaluator can try to slip PII past the detectors with small edits, hide it in an encoding,
+or feed files built to crash or stall the pipeline. `tools/adversarial_gen.py` builds such a
+set from the practice data (seed 3: 163 files with 1,043 tweaked mentions, 10 wrapped files,
+27 hostile files) and its `--verify` mode scans the output with the scorer's normalization
+plus payload decoding. It exits 1 on any leak, canary, raw copy of a PII file, hostile file
+handled against its declared expectation, or PII from the symlink target found in the release.
+CI runs it on every pull request and every push to `main`.
+
+| Tweak | Example | Mentions in seed 3 |
+|---|---|---:|
+| zero-width characters inside a word | `Ro\u200bhit` | 125 |
+| Latin diacritics | `Róhit Méhra` | 92 |
+| full-width letters and digits | `Ｒｏｈｉｔ`, `９８７６５` | 162 |
+| alternating, lower and upper case | `rOhIt`, `rohit`, `ROHIT` | 216 |
+| digits split by spaces, dashes, thin or non-breaking spaces | `98765 43210`, `98765\u201343210` | 271 |
+| Devanagari and Arabic-Indic digits | `९८७६५`, `٩٨٧٦٥` | 117 |
+| Cyrillic homoglyphs | `Rоhit` with a Cyrillic `о` | 45 |
+| PII wrapped in base64 (also nested), `\uXXXX` or %-encoding | `UGF0aWVudCBOYW1l...` | 15 |
+
+Result: 0 of 3,245 PII mentions and 0 of 8 canaries survive.
+
+| Hostile file | Handling |
+|---|---|
+| ELF or PE executable, gzip or zip bomb, binary polyglot | quarantined (`unsupported_binary`, `undecodable_text`), never decompressed |
+| XML "billion laughs", text that starts with a tag | quarantined (`unsupported_markup`), never parsed |
+| JSON list nested 10,000 deep | quarantined (`too_deep`) by a linear pre-scan, no recursion |
+| JSON with `NaN` or `Infinity` | quarantined (`malformed_json`) |
+| symlink pointing outside the input | quarantined (`symlink`): never parsed, copied or stored; a regular target is read only to hash it |
+| CSV formula injection, duplicate JSON keys, a 100,000-key object, UTF-16 without BOM, mixed encodings, a bidi file name | sanitized normally |
+| notes of up to 2 MB made of one repeated character, label, title word, base64 or hex alphabet | sanitized; each takes at most 5.4 s on its own, startup included |
+
+The whole adversarial set (227 files) runs in 33 s with a 344 MB peak on a laptop, down from
+158 s and 616 MB before chunked detection.
+
 ## Privacy and utility trade-off (measured on the practice data)
 
-`tools/sweep.py` runs each policy through our attacker and the utility check.
+`tools/sweep.py` runs each policy through our attacker and the utility check (figures from the
+current pipeline; the sweep uses its own pair of secrets, so risk can differ from the headline
+by 0.001).
 
 | Policy | Est. attack risk | Est. privacy points (of 25) | Medical values kept |
 |---|---:|---:|---:|
-| identifiers removed, adaptive bands, district kept (first pipeline) | 0.198 | 20.05 | 100.0% |
-| + rare values only | 0.184 | 20.41 | 97.9% |
-| + state fallback at k=2 | 0.133 | 21.67 | 97.5% |
-| **+ state fallback at k=3 and rare values (chosen)** | **0.109** | **22.28** | **97.8%** |
-| state everywhere | 0.109 | 22.29 | 96.0% |
+| district kept everywhere (no state fallback) | 0.185 | 20.38 | 98.8% |
+| state fallback at k=2 | 0.124 | 21.91 | 98.4% |
+| state fallback at k=3, no rare-value generalization | 0.116 | 22.10 | 98.9% |
+| 20-year age bands for everyone, k=3 | 0.105 | 22.37 | 97.9% |
+| **state fallback at k=3, rare values shared by 2 or fewer generalized (chosen)** | **0.101** | **22.46** | **97.7%** |
+| rare values shared by 3 or fewer generalized | 0.101 | 22.46 | 96.7% |
+| state everywhere | 0.101 | 22.48 | 96.9% |
+
+The first pipeline (identifiers removed, district kept, no rare values) measured 0.198. Date of
+birth shifted instead of suppressed scored lower in our estimator (94.87 against 95.93), because
+a shifted DOB still narrows the profile attack (A4 risk 0.229).
 
 We keep the district for most patients (it matters for public-health research) and give it up
 only for patients whose combination is rare. The remaining risk is mostly the targeted attack
@@ -223,6 +300,11 @@ gazetteers and our own transliteration code.
   diagnoses can look rare and get generalized.
 - Names written entirely in lowercase with no context cue (no label, honorific, relation or
   phone nearby) can be missed unless the same person appears elsewhere in structured data.
+- A text file that starts with `<` is quarantined as markup even when it is a plain note. In
+  our adversarial set this is the one file handled differently from the expected outcome; it
+  leaks nothing, but its content is not released.
+- `Ward 7` in an address is ambiguous between a municipal ward and a hospital ward; hospital
+  wards (`Ward 4 (Medicine)`) are kept, a bare `Ward N` next to address parts is removed.
 - `.jsonl` files are treated as plain text.
 
 ## Repository layout
@@ -231,7 +313,8 @@ gazetteers and our own transliteration code.
 main.py                 entry point (raksha.toml run command)
 config/policy.yaml      privacy policy (every value measured with tools/sweep.py)
 medveil/                the pipeline (standard library + cryptography + PyYAML)
-tools/                  dev only: redteam, chaos_gen, sweep, ci_gate, fhir_validate, devcheck, build_lexicons
+tools/                  dev only: redteam, chaos_gen, adversarial_gen, scorecard, sweep, ci_gate,
+                        fhir_validate, devcheck, build_lexicons
 tests/                  unit and end-to-end tests (synthetic sentences written by us)
 docs/                   implementation plan and the 2-page brief
 ```

@@ -10,7 +10,9 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import re
+import stat as _stat
 import sys
 import time
 from collections import Counter, defaultdict
@@ -90,7 +92,8 @@ def propagate(rec: Record, pat: list[str], rel: list[str]) -> None:
         new = []
         for m in WORD.finditer(text):
             w = m.group(0)
-            if w[0].isascii() and not (w[0].isupper()):
+            if w[0].isascii() and not any(c.isupper() for c in w):
+                # an all-lowercase word only counts before an honorific ("asha ji")
                 nxt = text[m.end():m.end() + 10].lower()
                 if not re.match(r"\s+(?:ji|sahab|bhai|behenji|didi|amma|bhaiya)\b", nxt):
                     continue
@@ -118,6 +121,49 @@ def _clean_path(s: str) -> Path:
     if len(s) >= 2 and s[0] == s[-1] and s[0] in "'\"":
         s = s[1:-1]
     return Path(s).resolve()
+
+
+_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+
+
+def _read_regular(p: Path, max_bytes: float, st: os.stat_result | None = None):
+    """(raw, reason, sha256 object) for a path that lstat saw as a regular file.
+
+    The file is opened without following links where the platform can (O_NOFOLLOW), and the
+    open handle is checked again: it must be a regular file and, when the lstat result `st`
+    is given, the same file (device and inode). That also covers platforms without
+    O_NOFOLLOW: a swap to a link or another file after the lstat is refused, not followed.
+    At most max_bytes + 1 bytes are read, so a file that grows meanwhile cannot exceed the
+    memory bound; it is hashed in chunks and quarantined as too large."""
+    fd = os.open(p, _OPEN_FLAGS)
+    with os.fdopen(fd, "rb") as fh:
+        fst = os.fstat(fh.fileno())
+        if not _stat.S_ISREG(fst.st_mode):
+            return b"", "special_file", None
+        if st is not None and (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+            return b"", "unreadable", None
+        limit = int(max_bytes)
+        data = b""
+        if fst.st_size <= limit:
+            # Ask for the size fstat reported plus one byte (asking for `limit` would make
+            # Python allocate a buffer that large for every file). The usual case is one
+            # read and one buffer; only a file that grew meanwhile is read on in 1 MB pieces,
+            # stopping just past the limit.
+            data = fh.read(fst.st_size + 1)
+            if len(data) > fst.st_size:
+                buf = bytearray(data)
+                while len(buf) <= limit:
+                    piece = fh.read(min(1 << 20, limit + 1 - len(buf)))
+                    if not piece:
+                        break
+                    buf += piece
+                data = bytes(buf)
+        if fst.st_size > limit or len(data) > limit:
+            h = hashlib.sha256(data)
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+            return b"", "too_large", h
+        return data, "", None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,24 +196,54 @@ def main(argv: list[str] | None = None) -> int:
     vault = Vault(out / "quarantine", keys.vault) if policy["quarantine"].get("vault") == "encrypted" else None
 
     # 1. inventory and parse -------------------------------------------------------
-    paths = sorted((p for p in inp.rglob("*") if p.is_file()), key=lambda p: p.relative_to(inp).as_posix())
+    entries = []
+    for root, dirs, fnames in os.walk(inp, followlinks=False):
+        dirs.sort()
+        for n in fnames:
+            entries.append(Path(root) / n)
+    entries.sort(key=lambda p: p.relative_to(inp).as_posix())
+    max_bytes = float(policy["ingest"].get("max_file_mb", 200)) * 1024 * 1024
     docs: list[Doc] = []
-    for p in paths:
+    for p in entries:
         rel = p.relative_to(inp).as_posix()
-        raw = p.read_bytes()
-        doc = Doc(rel=rel, sha256=hashlib.sha256(raw).hexdigest())
+        raw = b""
+        reason = ""
         try:
-            sniff_and_parse(doc, raw, policy)
-            build_slots(doc, classify_header, classify_key)
-            doc.status = "parsed"
-        except Quarantine as q:
-            doc.status, doc.reason = "quarantined", q.reason
-        except Exception:  # noqa: BLE001 - any parser failure means we cannot clean it safely
-            doc.status, doc.reason = "quarantined", "handler_error"
-        if doc.status == "quarantined" and vault is not None:
+            st = os.lstat(p)
+            if _stat.S_ISLNK(st.st_mode):
+                # A link is never parsed, copied or stored: it could point outside the input or
+                # at a device. A regular target is read only to report its SHA-256, the hash
+                # anyone reading the input path gets.
+                reason = "symlink"
+                try:
+                    tst = os.stat(p)
+                    if _stat.S_ISREG(tst.st_mode) and tst.st_size <= max_bytes:
+                        raw = p.read_bytes()
+                except OSError:
+                    pass
+            elif not _stat.S_ISREG(st.st_mode):
+                reason = "special_file"
+            else:
+                raw, reason, h = _read_regular(p, max_bytes, st)
+        except OSError:
+            reason = "unreadable"
+        doc = Doc(rel=rel, sha256=(h.hexdigest() if reason == "too_large" else hashlib.sha256(raw).hexdigest()))
+        if reason:
+            doc.status, doc.reason = "quarantined", reason
+        else:
+            try:
+                sniff_and_parse(doc, raw, policy)
+                build_slots(doc, classify_header, classify_key)
+                doc.status = "parsed"
+            except Quarantine as q:
+                doc.status, doc.reason = "quarantined", q.reason
+            except Exception:  # noqa: BLE001 - any parser failure means we cannot clean it safely
+                doc.status, doc.reason = "quarantined", "handler_error"
+        if doc.status == "quarantined" and vault is not None and raw and reason != "symlink":
             vault.put(doc.sha256, raw, doc.reason)
         doc.tokens = _file_tokens(rel)
         docs.append(doc)
+        raw = b""
     live = [d for d in docs if d.status == "parsed"]
 
     # 2. learn ---------------------------------------------------------------------
@@ -276,6 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     records_out = []
     used_names: set[str] = set()
     pin_digits = int(policy["location"].get("pin_prefix_digits", 3))
+    dob_mode = str(policy.get("dob", {}).get("mode", "suppress"))
     rec_index = {id(r): i for i, (_, r) in enumerate(recs)}
     for d in live:
         try:
@@ -289,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
                 ctx = Ctx(psn=psn, rec_token=keys.opaque(f"{d.rel}#{rec.loc}"),
                           shift=shift_for(keys, canon, policy), band=bands.get(canon), top=top,
                           district=district_name(rec), pat_tokens=pat, rel_tokens=rel, mrn_psn=mrn_psn,
-                          pin_digits=pin_digits)
+                          pin_digits=pin_digits, dob_mode=dob_mode, date_order=d.date_order)
                 rewrite_record(rec, ctx)
                 if rec.loc != "@file":
                     place_psn(rec, ctx, d)
