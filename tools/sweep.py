@@ -9,12 +9,16 @@ and prints one row per variant. Never part of `run`.
 --only runs the variant with exactly that name, or else every variant whose name
 contains the text ("--only k=3" runs just "k=3"; "--only 20y" runs both 20y rows).
 
-Every variant sets all six swept keys explicitly, so a row never inherits a value from
+Every variant sets all seven swept keys explicitly, so a row never inherits a value from
 config/policy.yaml and two rows cannot silently be the same policy. In the names, "k=N"
 is location.k_patients (fewer than N patients sharing gender, age band and district
 publish only the state); age.k_patients is 2 unless the name says "age k=3"; the age
 ladder is [10, 20] unless the name says "20y"; rare-value generalization is on with
-max_profiles_rare 2 unless the name says otherwise. "k=3" is the shipped policy.
+max_profiles_rare 2 unless the name says otherwise; age.k_condition (condition-aware
+band widening) is 3 unless the name says "cond-age". "k=3" is the shipped policy.
+
+Columns "util" and "total" are tools/scorecard.py estimates (utility points of 20, total
+of 100), so a privacy gain can be weighed against what it costs elsewhere.
 """
 from __future__ import annotations
 
@@ -33,17 +37,19 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def variant(ladder=(10, 20), age_k=2, loc_k=3, keep="district", rare=True, rare_max=2) -> dict:
-    return {"age": {"ladder": list(ladder), "k_patients": age_k},
+def variant(ladder=(10, 20), age_k=2, loc_k=3, keep="district", rare=True, rare_max=2, k_cond=3) -> dict:
+    return {"age": {"ladder": list(ladder), "k_patients": age_k, "k_condition": k_cond},
             "location": {"k_patients": loc_k, "keep_level": keep},
             "rare_values": {"enabled": rare, "max_profiles_rare": rare_max}}
 
 
 VARIANTS = {
-    "k=2": variant(loc_k=2),
     "k=3": variant(loc_k=3),
+    "k=3, no cond-age": variant(loc_k=3, k_cond=0),
+    "k=3, cond-age k2": variant(loc_k=3, k_cond=2),
+    "k=3, cond-age k4": variant(loc_k=3, k_cond=4),
+    "k=2": variant(loc_k=2),
     "k=0 (no state fallback)": variant(loc_k=0),
-    "20y, k=2": variant(ladder=(20,), loc_k=2),
     "20y, k=3": variant(ladder=(20,), loc_k=3),
     "age k=3, k=3": variant(age_k=3, loc_k=3),
     "state everywhere, k=3": variant(loc_k=3, keep="state"),
@@ -103,9 +109,37 @@ def run_variant(i: int, name: str, over: dict, base: dict, kit: Path, work: Path
     leak = re.search(r"PERSONAL DATA: (\d+) of", cd.stdout)
     if cd.returncode or not kept or not leak:
         return None, f"check_dev {why(cd)}" if cd.returncode else "check_dev output not understood"
+    # Whole-score estimate (tools/scorecard.py), reusing the red-team result above.
+    sj = work / f"sc_{i}.json"
+    sj.unlink(missing_ok=True)
+    r = run([sys.executable, "tools/scorecard.py", "--output", str(outs[0]), "--other", str(outs[1]),
+             "--input", str(kit / "dev" / "input"), "--truth", str(kit / "dev" / "truth" / "truth.json"),
+             "--redteam-json", str(rj), "--json", str(sj)], env)
+    if r.returncode or not sj.is_file():
+        return None, f"scorecard {why(r)}"
+    try:
+        score = json.loads(sj.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        return None, f"scorecard wrote unreadable JSON ({exc})"
     for out in outs:
         shutil.rmtree(out, ignore_errors=True)
-    return {"res": res, "kept": int(kept.group(1)) / max(1, int(kept.group(2))), "leaks": leak.group(1)}, None
+    return {"res": res, "kept": int(kept.group(1)) / max(1, int(kept.group(2))), "leaks": leak.group(1),
+            "score": score}, None
+
+
+def _total(row) -> str:
+    s = row.get("score") or {}
+    return f"{s['total']:.2f}" if isinstance(s.get("total"), (int, float)) else "-"
+
+
+def _util(row) -> str:
+    cats = (row.get("score") or {}).get("categories")
+    for c in cats if isinstance(cats, list) else []:
+        if isinstance(c, dict) and c.get("key") == "utility" and isinstance(c.get("points"), (int, float)):
+            return f"{c['points']:.2f}"
+    if isinstance(cats, dict) and isinstance((cats.get("utility") or {}).get("points"), (int, float)):
+        return f"{cats['utility']['points']:.2f}"
+    return "-"
 
 
 def main() -> int:
@@ -122,7 +156,8 @@ def main() -> int:
     base = yaml.safe_load((ROOT / "config" / "policy.yaml").read_text(encoding="utf-8"))
     work = Path(tempfile.mkdtemp(prefix="medveil-sweep-"))
     failed = 0
-    print(f"{'variant':<26} {'risk':>7} {'pts':>6} {'A2/3':>6} {'A4':>6} {'A5':>6} {'kept':>6} {'leaks':>6}")
+    print(f"{'variant':<26} {'risk':>7} {'pts':>6} {'A2/3':>6} {'A4':>6} {'A5':>6} {'kept':>6} {'leaks':>6}"
+          f" {'util':>6} {'total':>6}")
     try:
         for i, name in enumerate(VARIANTS):
             if name not in names:
@@ -144,7 +179,7 @@ def main() -> int:
             print(f"{name:<26} {risk if risk is not None else float('nan'):>7.3f} "
                   f"{25 * (1 - (risk or 0)):>6.2f} {ratio('record_linkage_risk'):>6.3f} "
                   f"{ratio('patients_reidentified'):>6.3f} {ratio('targeted_success'):>6.3f} "
-                  f"{row['kept']:>6.3f} {row['leaks']:>6}")
+                  f"{row['kept']:>6.3f} {row['leaks']:>6} {_util(row):>6} {_total(row):>6}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return 1 if failed else 0

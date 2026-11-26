@@ -8,7 +8,7 @@ DEFAULTS: dict = {
     "pseudonym": {"length": 8},
     "dates": {"shift_min_days": 30, "shift_max_days": 365},
     "dob": {"mode": "suppress"},
-    "age": {"ladder": [10, 20], "top_code": 80, "k_patients": 2},
+    "age": {"ladder": [10, 20], "top_code": 80, "k_patients": 2, "k_condition": 0},
     "location": {"keep_level": "district", "pin_prefix_digits": 3},
     "rare_values": {"max_profiles_rare": 3, "enabled": False},
     "ingest": {"max_file_mb": 200, "max_json_depth": 200, "on_garbled_text": "quarantine"},

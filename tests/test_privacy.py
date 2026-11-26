@@ -3,7 +3,7 @@ import datetime as dt
 import pytest
 
 from medveil.crypto import LETTERS, Keys
-from medveil.privacy import _aligned, plan_bands, shift_date
+from medveil.privacy import _aligned, band_label, plan_bands, shift_date, widen_for_conditions
 from medveil.rare import RareValues, chapter
 from medveil.model import Doc, Record, Slot, Span
 
@@ -191,3 +191,55 @@ def test_rare_value_matching_worst_case_is_fast():
     t0 = time.perf_counter()
     rv.collect(recs)
     assert time.perf_counter() - t0 < 5.0
+
+
+
+# ---------------------------------------------------------------- condition-aware age bands
+
+def _profiles(spec):
+    """spec: name -> (age, gender, district)."""
+    return {c: {"ages": [a], "gender": g, "district": d} for c, (a, g, d) in spec.items()}
+
+
+def _consistent(bands, c, others):
+    """How many of `others` (c included) publish a band containing c's own band."""
+    lo, hi = bands[c]
+    return sum(1 for o in others if bands[o][0] <= lo and hi <= bands[o][1])
+
+
+def test_condition_groups_become_k_anonymous_and_stay_truthful():
+    spec = {"a": (23, "F", "Lucknow"), "b": (37, "F", "Lucknow"), "c": (45, "F", "Lucknow"),
+            "d": (61, "F", "Lucknow"), "e": (68, "F", "Lucknow"), "f": (52, "M", "Lucknow")}
+    profiles = _profiles(spec)
+    bands = {c: _aligned(p["ages"], 10, 80) for c, p in profiles.items()}
+    level = {c: "state" for c in profiles}
+    tb = {c: {"A15.0"} for c in profiles}
+    widen_for_conditions(bands, profiles, level, tb, 3)
+    women = [c for c in profiles if profiles[c]["gender"] == "F"]
+    for c in women:
+        assert bands[c][0] <= spec[c][0] <= bands[c][1], "a band must contain the true age"
+        assert _consistent(bands, c, women) >= 3, (c, bands)
+    # a group of one (the only man with TB) has nobody to hide among: left as it was
+    assert bands["f"] == (50, 59)
+
+
+def test_small_groups_are_widened_as_one_run():
+    profiles = _profiles({"a": (25, "F", None), "b": (63, "F", None)})
+    bands = {"a": (20, 29), "b": (60, 69)}
+    widen_for_conditions(bands, profiles, {"a": "state", "b": "state"}, {"a": {"I10"}, "b": {"I10"}}, 3)
+    assert bands == {"a": (20, 69), "b": (20, 69)}
+
+
+def test_district_level_profiles_only_group_with_their_district():
+    profiles = _profiles({"a": (25, "F", "Lucknow"), "b": (63, "F", "Unnao")})
+    bands = {"a": (20, 29), "b": (60, 69)}
+    widen_for_conditions(bands, profiles, {"a": "district", "b": "district"},
+                         {"a": {"I10"}, "b": {"I10"}}, 3)
+    assert bands == {"a": (20, 29), "b": (60, 69)}   # different districts: no common group
+
+
+def test_widening_with_a_top_coded_band_is_labelled_open():
+    profiles = _profiles({"a": (66, "M", None), "b": (85, "M", None)})
+    bands = {"a": (60, 69), "b": (80, 200)}
+    widen_for_conditions(bands, profiles, {"a": "state", "b": "state"}, {"a": {"N18"}, "b": {"N18"}}, 2)
+    assert band_label(bands["a"], 80) == "60+" and band_label(bands["b"], 80) == "60+"

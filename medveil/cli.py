@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import guard
 from .crypto import Keys, Vault
-from .detect.engine import Knowledge, detect_slot, ident_tokens, learn_doc, resolve
+from .detect.engine import Knowledge, detect_slot, ident_tokens, learn_doc, own_ids_in_filename, resolve
 from .detect.fields import classify_header, classify_key
 from .detect.patterns import in_protected
 from .gate import Ledger, scrub
@@ -28,7 +28,7 @@ from .ingest import build_slots, sniff_and_parse
 from .link import extract_evidence, link
 from .model import PII_TYPES, Doc, Quarantine, Record, Span
 from .policy import load as load_policy
-from .privacy import plan_bands, raise_location, shift_for
+from .privacy import plan_bands, raise_location, shift_for, widen_for_conditions
 from .rare import RareValues
 from .rewrite import Ctx, district_name, place_psn, rename_file, rewrite_record, serialize
 from .translit import key, tokens_match
@@ -268,6 +268,7 @@ def main(argv: list[str] | None = None) -> int:
                     detect_slot(sl, K, d, file_level=(rec.loc == "@file"))
             for fs in d.file_slots:
                 detect_slot(fs, K, d, file_level=True)
+            own_ids_in_filename(d)
         except Exception:  # noqa: BLE001
             d.status, d.reason = "quarantined", "handler_error"
     live = [d for d in live if d.status == "parsed"]
@@ -333,6 +334,16 @@ def main(argv: list[str] | None = None) -> int:
         rare = RareValues(int(policy["rare_values"].get("max_profiles_rare", 3)))
         rare.collect(recs)
         rare.plan(rec_canon)
+    k_cond = int(policy["age"].get("k_condition", 0))
+    if k_cond > 1:
+        # Targeted-attack defence: patients who publish the same diagnosis or procedure
+        # get age bands wide enough that k_cond of them fit any one patient's demographics.
+        seen = rare
+        if seen is None:            # rare-value generalization off: every value is published
+            seen = RareValues(0)
+            seen.collect(recs)
+        widen_for_conditions(bands, profiles, loc_level, seen.published_values(rec_canon), k_cond,
+                             policy.get("_division_of"))
 
     # 6. propagate cluster names, then rewrite -------------------------------------
     for i, (_d, r) in enumerate(recs):

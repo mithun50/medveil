@@ -375,6 +375,10 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
         return
     if ft == "AGE":
         m = re.search(r"\d{1,3}", text)
+        if m and _NEG_BEFORE.search(text[:m.start()]):
+            # "-2 years" is an invalid value, not an age of 2: a band would exclude the
+            # recorded value, and a negative number singles nobody out. Left as it is.
+            return
         if m and sl.number:
             sl.spans = [Span(0, len(text), "AGE", value=int(float(text)), rule="field_age")]
         elif m:
@@ -382,7 +386,7 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
         return
     if ft == "AGE_SEX":
         m = re.search(r"\d{1,3}", text)
-        if m:
+        if m and not _NEG_BEFORE.search(text[:m.start()]):
             sl.spans = [Span(m.start(), m.end(), "AGE", value=int(m.group(0)), rule="field_age_sex")]
         return
     if sl.number:
@@ -433,6 +437,46 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
     if file_level and has_upper:
         spans.extend(_aggressive_names(view, prot, any(s.etype in ("MRN", "PHONE") for s in ids)))
     sl.spans = resolve(spans)
+
+
+_ID_IN_NAME = re.compile(r"[A-Za-z0-9]+(?:[\-_./ ]+[A-Za-z0-9]+)*")
+_NEG_BEFORE = re.compile(r"[-\u2212\u2013\u2014]\s*$")      # "-2", "(-2", "age -2", Unicode minus
+
+
+def own_ids_in_filename(doc: Doc) -> None:
+    """A file name often repeats the identifier its content carries ("..._DHH-ADM-00591.txt"
+    for "IP No.: DHH/ADM/00591"). Every identifier detected in the document's own content is
+    therefore also removed from its file name, whatever the separators, even when the format
+    is new and shape induction has not seen it twice."""
+    keys = set()
+    for rec in doc.records:
+        for sl in rec.slots:
+            for sp in sl.spans:
+                v = sp.value
+                # a short digit-only key would also match dates or counters in the file name
+                if sp.etype in ("MRN", "INSURANCE") and isinstance(v, str) and len(v) >= 5 and \
+                        (not v.isdigit() or len(v) >= 8):
+                    keys.add(v)
+    if not keys:
+        return
+    for fs in doc.file_slots:
+        if fs.kind != "filename":
+            continue
+        extra = []
+        for m in _ID_IN_NAME.finditer(fs.text):
+            # try the longest run first, then shorter runs inside it (a prefix or suffix may
+            # be glued on: "ds_DHH-ADM-00591")
+            offs = [(x.start(), x.end()) for x in re.finditer(r"[A-Za-z0-9]+", fs.text[m.start():m.end()])]
+            offs = [(s + m.start(), e + m.start()) for s, e in offs]
+            parts = offs
+            for i in range(len(parts)):
+                for j in range(len(parts), i, -1):
+                    s, e = offs[i][0], offs[j - 1][1]
+                    if id_key(fs.text[s:e]) in keys:
+                        extra.append(Span(s, e, "MRN", value=id_key(fs.text[s:e]), rule="own_id"))
+                        break
+        if extra:
+            fs.spans = resolve(fs.spans + extra)
 
 
 def _chunks(text: str):

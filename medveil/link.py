@@ -149,9 +149,13 @@ def full_match(a: tuple, b: tuple) -> bool:
     return True
 
 
+@lru_cache(maxsize=50_000)
 def given_of(toks: tuple) -> str | None:
-    ident = [t for t in toks if t in set(_ident(toks))]
-    return ident[0] if ident else None
+    ident = set(_ident_t(tuple(toks)))
+    for t in toks:
+        if t in ident:
+            return t
+    return None
 
 
 def name_compatible(a: tuple, b: tuple) -> bool:
@@ -342,19 +346,37 @@ def link(records: list[Record], default_ref: dt.date) -> dict[int, list[int]]:
         changed = False
         rounds += 1
         roots = sorted(clusters)
-        tok_index: dict[str, set[int]] = defaultdict(set)
+        # Candidates share a name-token block AND could pass _clue_link's clue gate: both
+        # have relatives, both have villages, or they share a DOB. Indexing the three
+        # cases separately gives exactly the block candidates that pass the gate, without
+        # enumerating the pairs that share only a common surname ("Yadav"), which grow
+        # quadratically with the input.
+        rel_index: dict[str, set[int]] = defaultdict(set)
+        vil_index: dict[str, set[int]] = defaultdict(set)
+        dob_index: dict[tuple, set[int]] = defaultdict(set)
+        blocks_of: dict[int, set[str]] = {}
         for r in roots:
             c = clusters[r]
-            for nm in c.names + c.mentions:
-                for t in _ident(nm):
-                    tok_index[_block(t)].add(r)
+            bl = {_block(t) for nm in c.names + c.mentions for t in _ident(nm)}
+            blocks_of[r] = bl
+            for b in bl:
+                if c.relatives:
+                    rel_index[b].add(r)
+                if c.villages:
+                    vil_index[b].add(r)
+                for d in c.dobs:
+                    dob_index[(b, d)].add(r)
         picks: dict[int, list[int]] = {}
         for r in roots:
             c = clusters[r]
             cands = set()
-            for nm in c.names + c.mentions:
-                for t in _ident(nm):
-                    cands |= tok_index.get(_block(t), set())
+            for b in blocks_of[r]:
+                if c.relatives:
+                    cands |= rel_index.get(b, set())
+                if c.villages:
+                    cands |= vil_index.get(b, set())
+                for d in c.dobs:
+                    cands |= dob_index.get((b, d), set())
             cands.discard(r)
             matches = [o for o in sorted(cands) if _clue_link(c, clusters[o])]
             # Prefer anchors (clusters with identifiers): two fragments of one person
@@ -381,8 +403,15 @@ def link(records: list[Record], default_ref: dt.date) -> dict[int, list[int]]:
 
 
 def _clue_link(a: Cluster, b: Cluster) -> bool:
-    if conflict(a, b):
+    # Every way _clue_positive can succeed needs a shared DOB, relatives on both sides or
+    # villages on both sides. Testing that first (cheap set checks) skips the fuzzy name
+    # comparisons for the vast majority of candidate pairs; the result is unchanged.
+    if not (a.dobs & b.dobs or (a.relatives and b.relatives) or (a.villages and b.villages)):
         return False
+    return not conflict(a, b) and _clue_positive(a, b)
+
+
+def _clue_positive(a: Cluster, b: Cluster) -> bool:
     full = any(full_match(x, y) for x in a.names for y in b.names)
     if full:
         if a.dobs & b.dobs:

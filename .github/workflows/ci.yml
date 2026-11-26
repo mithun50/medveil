@@ -47,6 +47,16 @@ jobs:
           python tools/ci_gate.py --input chaos/7/input --truth chaos/7/truth/truth.json
           python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 11 --variants names,headers,ids
           python tools/ci_gate.py --input chaos/11/input --truth chaos/11/truth/truth.json
+      - name: Quality gate on twenty more chaos seeds (21-40)
+        # Seeds 7 and 11 were used while developing, so they no longer measure generalization
+        # on their own; seeds 21-40 exposed header and label gaps they had hidden.
+        working-directory: medveil
+        run: |
+          for s in $(seq 21 40); do
+            python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed "$s" > /dev/null
+            python tools/ci_gate.py --input "chaos/$s/input" --truth "chaos/$s/truth/truth.json"
+            rm -rf "chaos/$s"
+          done
       - name: Adversarial set (tweaked PII, encoded payloads, hostile files) must not leak
         working-directory: medveil
         run: |

@@ -912,6 +912,8 @@ def _score_targets(records, profiles, prof_true_rids, prof_text_low,
 
         total_w = 0.0
         true_w = 0.0
+        n_hit = 0
+        n_consistent_cond = 0
         for pi, p in enumerate(profiles):
             if reg is not None and not consistent_with(reg, p):
                 continue
@@ -920,8 +922,11 @@ def _score_targets(records, profiles, prof_true_rids, prof_text_low,
                            for td in target_dates)
             cond_hit = bool(cond) and cond.lower() in prof_text_low[pi]
             stay_hit = bool(stay) and stay in p.intervals
+            if cond_hit:
+                n_consistent_cond += 1
             if not (date_hit or cond_hit or stay_hit):
                 continue
+            n_hit += 1
             w = 0.0
             if date_hit:
                 w += 1.0
@@ -946,7 +951,8 @@ def _score_targets(records, profiles, prof_true_rids, prof_text_low,
             successes.append(true_w / total_w if total_w > 0 else 0.0)
             if os.environ.get("REDTEAM_DEBUG"):
                 print(f"   A5 target {rid} cond={cond!r} stay={stay} share={successes[-1]:.2f} "
-                      f"cond_profiles={cond_share.get(cond, 0) if cond else '-'}")
+                      f"cond_profiles={cond_share.get(cond, 0) if cond else '-'} "
+                      f"consistent_hits={n_hit} consistent_cond={n_consistent_cond}")
 
     targeted = sum(successes) / len(successes) if successes else 0.0
     decoy_rate = decoy_claims / decoys if decoys else 0.0

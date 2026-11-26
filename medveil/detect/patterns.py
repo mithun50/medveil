@@ -160,8 +160,8 @@ ID_LABEL_DEVA = re.compile(r"(पंजीकरण\s*सं\.?|पंजीक�
                            r"रजिस्ट्रेशन\s*(?:सं\.?|नं\.?|नंबर)|मरीज़?\s*(?:सं\.?|संख्या|क्रमांक|आईडी)|रोगी\s*(?:सं\.?|संख्या|क्रमांक))"
                            r"\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{2,30}[A-Za-z0-9])")
 # Any other "<label> No./Number/ID/क्रमांक: <alphanumeric with digits>" is treated as an identifier.
-GENERIC_ID_LABEL = re.compile(r"(?i)\b(?:[A-Za-z]{2,12}\.?\s){0,2}(?:No|Number|ID|Code|#)\.?\s*[:#\-]\s*([A-Za-z]{0,6}[/\-_.]?\d[A-Za-z0-9/\-_.]{3,28}[A-Za-z0-9])"
-                              r"|(?:[\u0900-\u097F]+\s){0,2}(?:क्रमांक|संख्या|सं\.|नंबर|आईडी)\s*[:]\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{3,30})")
+GENERIC_ID_LABEL = re.compile(r"(?i)\b(?:[A-Za-z]{2,12}\.?\s|(?:[A-Za-z]\.\s?){2,4}){0,2}(?:No|Number|ID|Code|#)\.?\s*[:#\-]\s*([A-Za-z]{0,6}(?:[/\-_.][A-Za-z]{1,6}){0,2}[/\-_.]?\d[A-Za-z0-9/\-_.]{3,28}[A-Za-z0-9])"
+                              r"|(?:[\u0900-\u097F.]+\s){0,3}(?:क्रमांक|संख्या|सं\.|नं\.|नंबर|आईडी)\s*[:]\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{3,30})")
 _GENERIC_ID_SKIP = re.compile(r"(?i)\b(?:bill|invoice|receipt|sample|visit|order|test|lab|report|trip|ticket|package|"
                               r"batch|lot|ward|bed|room|version|icd|loinc|phone|mobile|contact|mob|ph|tel|aadhaar|aadhar|"
                               r"pan|abha|pin|zip|policy|claim|serial|sr|s|page)\b[^:\n]{0,14}$")
