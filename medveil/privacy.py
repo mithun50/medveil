@@ -105,7 +105,8 @@ def plan_bands(profiles: dict[str, dict], policy: dict) -> tuple[dict, dict]:
     return out, level
 
 
-def widen_for_conditions(bands: dict, profiles: dict, level: dict, values_of: dict, k: int) -> int:
+def widen_for_conditions(bands: dict, profiles: dict, level: dict, values_of: dict, k: int,
+                         division_of: dict | None = None) -> int:
     """Targeted-attack defence (k-anonymity on condition + demographics).
 
     An attacker who knows a patient's condition, gender, age and district looks for the
@@ -121,7 +122,13 @@ def widen_for_conditions(bands: dict, profiles: dict, level: dict, values_of: di
         if c not in bands or bands[c] is None:
             continue
         p = profiles.get(c, {})
-        loc = p.get("district") if level.get(c) == "district" else None
+        lv = level.get(c)
+        if lv == "district":
+            loc = p.get("district")
+        elif lv == "division":
+            loc = "division:" + str((division_of or {}).get(p.get("district")))
+        else:
+            loc = None              # every state-level profile publishes the same location
         for v in vals:
             groups[(v, p.get("gender"), loc)].append(c)
     want: dict[str, tuple[int, int]] = {}
@@ -160,7 +167,7 @@ def shift_date(d: dt.date, days: int) -> dt.date:
         return d
 
 
-_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?|Janpad|Zila|Jila)\s+|(?:जिला|ज़िला|जनपद)\s+)"
+_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?|Janpad|Zila|Zilla|Jila|Jilla)\s+|(?:जिला|ज़िला|जनपद)\s+)"
                        r"([A-Za-z][A-Za-z ]{2,30}?|[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*?)(?=\s*(?:[-,;\n]|$|\s{2}))")
 
 
@@ -181,7 +188,12 @@ def raise_location(rec, level: str, division_of: dict) -> bool:
                 new = _label(district_of(base), level, division_of)
         elif sl.ftype in (None, "TEXT", "ADDRESS"):
             def sub(m):
-                return m.group(1) + _label(district_of(m.group(2)), level, division_of)
+                d = district_of(m.group(2))
+                # "Zila Hospital Sultanpur", "Jila Aspatal": these words also start names of
+                # institutions; replace only what resolves to a district
+                if d is None and not re.match(r"(?i)dist", m.group(1)):
+                    return m.group(0)
+                return m.group(1) + _label(d, level, division_of)
             new = _DIST_CTX.sub(sub, base)
         if sl.ftype == "PIN" and re.fullmatch(r"\d+\*+", base.strip()):
             new = "******"

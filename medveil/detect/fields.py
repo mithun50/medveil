@@ -29,8 +29,11 @@ def norm_header(h: str) -> str:
 _PERSON_QUALIFIERS = frozenset("""
 patient patients pt pts full first last given middle family sur surname beneficiary member insured
 claimant customer client applicant person holder card rogi mariz mareez marij poora pura sampoorn
-of the s
+caregiver caretaker witness informant visitor caller donor recipient nominee proposer guarantor
 """.split())
+# words that qualify the language or form of a name, not its subject: "Name (English)"
+_NAME_FORM = frozenset("english hindi eng hin latin devanagari roman local regional in as per".split())
+_FILLER = frozenset("of the s no ka ki ke".split())
 _NAME_WORDS = frozenset("name names naam nam".split())
 
 
@@ -38,8 +41,15 @@ def _non_person_name(n: str) -> bool:
     words = n.split()
     if not any(w in _NAME_WORDS for w in words):
         return False
-    others = [w for w in words if w not in _NAME_WORDS and w not in ("no", "ka", "ki", "ke")]
+    others = [w for w in words if w not in _NAME_WORDS and w not in _FILLER and w not in _NAME_FORM]
     return bool(others) and not any(w in _PERSON_QUALIFIERS for w in others)
+
+
+# Devanagari words that make "... का नाम" a thing's name: test, drug, hospital, procedure...
+_DEVA_THING = ("\u091c\u093e\u0901\u091a", "\u091c\u093e\u0902\u091a", "\u0926\u0935\u093e",
+               "\u0905\u0938\u094d\u092a\u0924\u093e\u0932", "\u092a\u094d\u0930\u0915\u094d\u0930\u093f\u092f\u093e",
+               "\u0911\u092a\u0930\u0947\u0936\u0928", "\u0935\u093f\u092d\u093e\u0917", "\u0935\u093e\u0930\u094d\u0921",
+               "\u0932\u0948\u092c", "\u092c\u0940\u092e\u093e\u0930\u0940", "\u0930\u094b\u0917 \u0915\u093e")
 
 
 @lru_cache(maxsize=4096)
@@ -51,6 +61,8 @@ def classify_header(h: str) -> str | None:
         r = " ".join(raw.replace(":", " ").split())
         for k, t in sorted(DEVA_HEADER.items(), key=lambda kv: -len(kv[0])):
             if k in r:
+                if t == "NAME" and any(w in r for w in _DEVA_THING):
+                    return None
                 return t
     n = norm_header(raw)
     for rx, t in _RULES:

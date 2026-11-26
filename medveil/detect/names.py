@@ -239,7 +239,7 @@ _LABELS = [
 _REL = re.compile(r"(?i)(?<![A-Za-z/])(S|D|W|C|B|F|M|Wd|H)\s?/\s?O\b\.?\s*[:\-]?\s*|"
                   r"\b(?:son|daughter|wife|husband|widow|care|baby)\s+of\s+")
 _DEVA_REL = re.compile(r"(?:पुत्र|पुत्री|पत्नी|पति|सुपुत्र|सुपुत्री|पिता)\s*(?:श्री\s*)?")
-_POSSESSIVE_REL = re.compile(r"\b((?:[A-Z][a-z]+\s){0,2}[A-Z][a-z]+)['\u2019]s\s+(?:attendant|wife|husband|son|daughter|"
+_POSSESSIVE_REL = re.compile(r"\b((?:[A-Z][a-z]+\s){0,3}[A-Z][a-z]+)['\u2019]s\s+(?:attendant|wife|husband|son|daughter|"
                              r"mother|father|brother|sister|guardian|relative|relatives|family|caretaker|bystander|"
                              r"in-laws?|mother-in-law|father-in-law|nephew|niece|grandson|granddaughter|escort)\b")
 _CHAT = re.compile(r"^\[[^\]\n]{4,40}\]\s*([^:\n]{2,40}):", re.M)
@@ -550,6 +550,11 @@ def find_address(text: str, prot: list, whole: bool = False) -> list[Span]:
             add(m.start(1), m.end(1), "VILLAGE", "village")
     for rx in (TEHSIL, TEHSIL_DEVA):
         for m in rx.finditer(text):
+            # "Block" is also clinical ("AV Block Type II"): only inside an address
+            if m.group(0).lower().startswith("block") and not _in(ranges, m.start(), m.end()):
+                continue
+            if in_protected(prot, m.start(1), m.end(1)):
+                continue
             add(m.start(1), m.end(1), "TEHSIL", "tehsil")
     for m in PIN_LABEL.finditer(text):
         g = 1 if m.group(1) else 2

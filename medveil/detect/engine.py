@@ -375,7 +375,7 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
         return
     if ft == "AGE":
         m = re.search(r"\d{1,3}", text)
-        if m and text[:m.start()].strip() == "-":
+        if m and _NEG_BEFORE.search(text[:m.start()]):
             # "-2 years" is an invalid value, not an age of 2: a band would exclude the
             # recorded value, and a negative number singles nobody out. Left as it is.
             return
@@ -386,7 +386,7 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
         return
     if ft == "AGE_SEX":
         m = re.search(r"\d{1,3}", text)
-        if m:
+        if m and not _NEG_BEFORE.search(text[:m.start()]):
             sl.spans = [Span(m.start(), m.end(), "AGE", value=int(m.group(0)), rule="field_age_sex")]
         return
     if sl.number:
@@ -439,7 +439,8 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False, _dep
     sl.spans = resolve(spans)
 
 
-_ID_IN_NAME = re.compile(r"[A-Za-z0-9]+(?:[\-_./][A-Za-z0-9]+)*")
+_ID_IN_NAME = re.compile(r"[A-Za-z0-9]+(?:[\-_./ ]+[A-Za-z0-9]+)*")
+_NEG_BEFORE = re.compile(r"[-\u2212\u2013\u2014]\s*$")      # "-2", "(-2", "age -2", Unicode minus
 
 
 def own_ids_in_filename(doc: Doc) -> None:
@@ -451,8 +452,11 @@ def own_ids_in_filename(doc: Doc) -> None:
     for rec in doc.records:
         for sl in rec.slots:
             for sp in sl.spans:
-                if sp.etype in ("MRN", "INSURANCE") and isinstance(sp.value, str) and len(sp.value) >= 5:
-                    keys.add(sp.value)
+                v = sp.value
+                # a short digit-only key would also match dates or counters in the file name
+                if sp.etype in ("MRN", "INSURANCE") and isinstance(v, str) and len(v) >= 5 and \
+                        (not v.isdigit() or len(v) >= 8):
+                    keys.add(v)
     if not keys:
         return
     for fs in doc.file_slots:
@@ -462,11 +466,9 @@ def own_ids_in_filename(doc: Doc) -> None:
         for m in _ID_IN_NAME.finditer(fs.text):
             # try the longest run first, then shorter runs inside it (a prefix or suffix may
             # be glued on: "ds_DHH-ADM-00591")
-            parts = re.split(r"[\-_./]", m.group(0))
-            offs, pos = [], m.start()
-            for p_ in parts:
-                offs.append((pos, pos + len(p_)))
-                pos += len(p_) + 1
+            offs = [(x.start(), x.end()) for x in re.finditer(r"[A-Za-z0-9]+", fs.text[m.start():m.end()])]
+            offs = [(s + m.start(), e + m.start()) for s, e in offs]
+            parts = offs
             for i in range(len(parts)):
                 for j in range(len(parts), i, -1):
                     s, e = offs[i][0], offs[j - 1][1]

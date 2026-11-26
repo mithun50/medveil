@@ -125,3 +125,74 @@ def test_district_in_text_is_raised_in_both_scripts(text):
     rec.slots.append(Slot(path=(), text=text, ftype="TEXT", kind="text"))
     assert raise_location(rec, "state", {})
     assert "Uttar Pradesh" in rec.slots[0].out
+
+
+
+# --------------------------------------------------------------- review findings, PR #4
+def test_devanagari_id_label_prefix_is_linear():
+    import time
+    text = "\u0915" * 4000 + " \u0928\u0902.: AB12345"
+    t0 = time.perf_counter()
+    found(text)
+    assert time.perf_counter() - t0 < 1.0
+
+
+@pytest.mark.parametrize("header,kind", [
+    ("Name (English)", "NAME"), ("Name (Hindi)", "NAME"), ("caregiver name", "NAME"), ("witness name", "NAME"),
+    ("name of hospital", None), ("hospital's name", None),
+    ("\u091c\u093e\u0901\u091a \u0915\u093e \u0928\u093e\u092e", None),          # test's name
+    ("\u0926\u0935\u093e \u0915\u093e \u0928\u093e\u092e", None),                # drug's name
+])
+def test_name_header_qualifiers(header, kind):
+    assert classify_header(header) == kind
+
+
+def test_clinical_block_is_not_a_tehsil():
+    assert not [s for s in found("Diagnosis: AV Block Type II, on pacemaker review") if s[0] == "TEHSIL"]
+    assert ("TEHSIL", "Lambhua") in found("Address: H.No 12, Block Lambhua, Distt Sultanpur")
+
+
+def test_possessive_keeps_four_token_names():
+    assert ("NAME", "Mohd Abdul Rashid Khan") in found("Mohd Abdul Rashid Khan's attendant called.")
+
+
+@pytest.mark.parametrize("text", ["(-2)", "age -2", "\u22122 yrs"])
+def test_any_minus_before_an_age_field_value(text):
+    sl = Slot(path=(0, 3), text=normalize(text), ftype="AGE", kind="value", key="Age")
+    detect_slot(sl, K, Doc(rel="r.csv", sha256="0"))
+    assert not [s for s in sl.spans if s.etype == "AGE"]
+
+
+def test_hospital_named_after_zila_is_not_replaced():
+    rec = Record(loc="doc")
+    rec.slots.append(Slot(path=(), text="Referred from Zila Hospital Sultanpur. Zilla Sultanpur, 228001",
+                          ftype="TEXT", kind="text"))
+    raise_location(rec, "state", {})
+    out = rec.slots[0].out
+    assert "Zila Hospital" in out and "[REGION]" not in out
+    assert "Zilla Uttar Pradesh" in out
+
+
+def test_id_with_doubled_separators_in_the_file_name():
+    from medveil.detect.engine import own_ids_in_filename
+    doc = Doc(rel="discharge/ds_ZXQ__QXZ__1234.txt", sha256="0")
+    sniff_and_parse(doc, "IP No.: ZXQ/QXZ/1234\nDiagnosis: Malaria (B54)\n".encode(), DEFAULTS)
+    build_slots(doc, classify_header, classify_key)
+    for rec in doc.records:
+        for sl in rec.slots:
+            detect_slot(sl, K, doc)
+    for fs in doc.file_slots:
+        detect_slot(fs, K, doc, file_level=True)
+    own_ids_in_filename(doc)
+    fs = next(s for s in doc.file_slots if s.kind == "filename")
+    assert [fs.text[s.start:s.end] for s in fs.spans if s.etype == "MRN"] == ["ZXQ__QXZ__1234"]
+
+
+def test_condition_groups_respect_published_divisions():
+    from medveil.privacy import widen_for_conditions
+    profiles = {"a": {"ages": [25], "gender": "F", "district": "Lucknow"},
+                "b": {"ages": [63], "gender": "F", "district": "Gorakhpur"}}
+    bands = {"a": (20, 29), "b": (60, 69)}
+    widen_for_conditions(bands, profiles, {"a": "division", "b": "division"}, {"a": {"I10"}, "b": {"I10"}}, 3,
+                         {"Lucknow": "Lucknow", "Gorakhpur": "Gorakhpur"})
+    assert bands == {"a": (20, 29), "b": (60, 69)}    # different divisions: no common group

@@ -1,5 +1,8 @@
 """Dev only: list every generalization field the scorer checks, with input, output and score.
 
+Prints raw truth, input and output values: run it on synthetic data only (the kit's practice
+data or our generated sets), never on real records, and never in CI logs.
+
     python tools/gen_detail.py --output out_a [--kind district] [--zero]
 """
 from __future__ import annotations
@@ -35,9 +38,12 @@ def main() -> int:
     ap.add_argument("--tokens", action="store_true", help="list the non-PII tokens lost (token retention)")
     a = ap.parse_args()
     truth = json.loads(Path(a.truth).read_text(encoding="utf-8"))
-    cfg_path = KIT / "scoring.toml"
+    kit = sc.guess_kit(Path(a.truth))
+    if not (kit / "scoring.toml").is_file():
+        kit = KIT
+    cfg_path = kit / "scoring.toml"
     ctx = sc.Ctx(truth, Path(a.truth), Path(a.input), Path(a.output), sc.load_toml(cfg_path),
-                 hashlib.sha256(cfg_path.read_bytes()).hexdigest(), KIT)
+                 hashlib.sha256(cfg_path.read_bytes()).hexdigest(), kit)
     if a.tokens:
         lost, lost_files = Counter(), defaultdict(Counter)
         for rel in sorted(ctx.files):
@@ -99,10 +105,10 @@ def main() -> int:
             continue
         if a.zero and s > 0:
             continue
-        print("%-8s %.2f bad=%d loc=%d %s %s true=%r in=%r out=%r" % (k, s, bad, located, rel, loc, true, iv, ov))
-        shown += 1
         if shown >= a.limit:
             break
+        print("%-8s %.2f bad=%d loc=%d %s %s true=%r in=%r out=%r" % (k, s, bad, located, rel, loc, true, iv, ov))
+        shown += 1
     return 0
 
 

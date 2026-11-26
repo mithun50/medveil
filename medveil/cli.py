@@ -342,7 +342,8 @@ def main(argv: list[str] | None = None) -> int:
         if seen is None:            # rare-value generalization off: every value is published
             seen = RareValues(0)
             seen.collect(recs)
-        widen_for_conditions(bands, profiles, loc_level, seen.published_values(rec_canon), k_cond)
+        widen_for_conditions(bands, profiles, loc_level, seen.published_values(rec_canon), k_cond,
+                             policy.get("_division_of"))
 
     # 6. propagate cluster names, then rewrite -------------------------------------
     for i, (_d, r) in enumerate(recs):

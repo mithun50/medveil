@@ -115,12 +115,12 @@ def run_variant(i: int, name: str, over: dict, base: dict, kit: Path, work: Path
     r = run([sys.executable, "tools/scorecard.py", "--output", str(outs[0]), "--other", str(outs[1]),
              "--input", str(kit / "dev" / "input"), "--truth", str(kit / "dev" / "truth" / "truth.json"),
              "--redteam-json", str(rj), "--json", str(sj)], env)
-    score = None
-    if sj.is_file():
-        try:
-            score = json.loads(sj.read_text(encoding="utf-8"))
-        except ValueError:
-            score = None
+    if r.returncode or not sj.is_file():
+        return None, f"scorecard {why(r)}"
+    try:
+        score = json.loads(sj.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        return None, f"scorecard wrote unreadable JSON ({exc})"
     for out in outs:
         shutil.rmtree(out, ignore_errors=True)
     return {"res": res, "kept": int(kept.group(1)) / max(1, int(kept.group(2))), "leaks": leak.group(1),

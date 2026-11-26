@@ -200,7 +200,7 @@ order-insensitively with Jaro-Winkler on these keys.
 |---|---|
 | dates | one keyed shift per patient, plus or minus 30 to 365 days, never 0, same format as the input; intervals and stay lengths stay exact |
 | date of birth | suppressed (a truthful DOB gives the birth year and undoes age banding) |
-| age | 10-year band if 2+ patients share (gender, band, district), else 20 years; 80+ top-coded; one band for all of a patient's records, always containing every true age. Then, against the targeted attack: patients who publish the same diagnosis or procedure are grouped by gender and published district, sorted by age and cut into runs of at least 3, and each band is widened to cover its run, so at least 3 patients fit the demographics of any one of them |
+| age | 10-year band if 2+ patients share (gender, band, district), else 20 years; 80+ top-coded; one band for all of a patient's records, always containing every true age. Then, against the targeted attack: patients who publish the same diagnosis or procedure are grouped by gender and published district, sorted by age and cut into runs of at least 3, and each band is widened to cover its run, so in a group of 3 or more at least 3 patients fit the demographics of any one of them. A group of 2 is widened together (2 fit); a patient alone with a diagnosis cannot be hidden by age and keeps the band |
 | house, mohalla, landmark, village, tehsil | removed; village and tehsil fields become the district |
 | district | kept, unless fewer than 3 patients share (gender, band, district): then the state |
 | PIN | first 3 digits in PIN fields (`229***`), removed in text |
