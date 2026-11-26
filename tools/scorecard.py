@@ -2463,12 +2463,12 @@ def cat_performance(ctx: Ctx, args, maxpts: float) -> dict:
         wall = loglin(float(secs), float(prof.get("time_good_s", 15)), float(prof.get("time_limit_s", 300)))
     else:
         wall = 1.0
-        ctx.notes.append("wall time not in report.json: not measured, scored 1.0")
+        ctx.notes.append("wall time missing or invalid in report.json: not measured, scored 1.0")
     if isinstance(mem, (int, float)) and mem > 0:
         memory = loglin(float(mem), float(prof.get("memory_good_mb", 512)), float(prof.get("memory_limit_mb", 4096)))
     else:
         memory = 1.0
-        ctx.notes.append("peak memory not in report.json: not measured, scored 1.0")
+        ctx.notes.append("peak memory missing or invalid in report.json: not measured, scored 1.0")
     det_msg = "not measured"
     if args.repeat:
         a, b = _tree_bytes(ctx.out_dir), _tree_bytes(Path(args.repeat))

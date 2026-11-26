@@ -321,8 +321,8 @@ def test_performance_ignores_malformed_report_sections():
         class _Ctx:
             cfg, rel, notes = {}, _Rel(), []
         sc.cat_performance(_Ctx(), _A(), 10.0)     # used to raise AttributeError on these
-        assert any(n.startswith("wall time not in report.json") for n in _Ctx.notes), (rep, _Ctx.notes)
-        assert any(n.startswith("peak memory not in report.json") for n in _Ctx.notes), (rep, _Ctx.notes)
+        assert any(n.startswith("wall time missing or invalid") for n in _Ctx.notes), (rep, _Ctx.notes)
+        assert any(n.startswith("peak memory missing or invalid") for n in _Ctx.notes), (rep, _Ctx.notes)
 
 
 def test_non_finite_measurement_flags_are_rejected():
