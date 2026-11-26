@@ -1,0 +1,21 @@
+# environments and caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# run outputs (never commit sanitized releases or debug output)
+out*/
+my_output*/
+runs/
+*.log
+
+# practice data stays in the sibling kit folder, never in this repo
+dev/
+Secret-Wards-ToolKit/
+
+# local notes
+.DS_Store
+Thumbs.db

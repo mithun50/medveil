@@ -1,0 +1,4 @@
+# Runtime dependencies. The core pipeline is standard library only; these two are
+# small, have wheels for Python 3.10 to 3.13 on Linux, and degrade gracefully.
+cryptography>=42,<51      # AES-256-GCM quarantine vault (vault turns off if missing)
+PyYAML>=6.0,<7            # config/policy.yaml (built-in defaults apply if missing)

@@ -1,0 +1,6 @@
+# Development and test tools only. Never needed by `run`.
+-r requirements.txt
+pytest>=8
+faker>=30                 # name pools for tools/build_lexicons.py and tools/chaos_gen.py
+psutil>=5                 # memory readings on Windows during development
+indic-transliteration>=2.3  # cross-check of our own Devanagari skeleton in tests
