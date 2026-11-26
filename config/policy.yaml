@@ -17,12 +17,14 @@ age:
   k_patients: 2            # keep 10-year bands only if 2+ patients share (gender, band, district)
 
 location:
-  keep_level: district     # house, mohalla, landmark, village and tehsil are removed or raised to district
+  keep_level: district     # district is kept for research; house, mohalla, landmark, village, tehsil removed
+  fallback_level: state    # if fewer than k_patients share (gender, band, district), publish only the state
+  k_patients: 3            # measured (tools/sweep.py): risk 0.133 at k=2, 0.109 at k=3, utility 97.5% -> 96.8%
   pin_prefix_digits: 3     # PIN fields keep the first 3 digits: 229***
 
 rare_values:
-  enabled: false
-  max_profiles_rare: 3
+  enabled: true            # generalize diagnoses/procedures that 2 or fewer patients share
+  max_profiles_rare: 2
 
 ingest:
   max_file_mb: 200

@@ -26,7 +26,8 @@ from .ingest import build_slots, sniff_and_parse
 from .link import extract_evidence, link
 from .model import PII_TYPES, Doc, Quarantine, Record, Span
 from .policy import load as load_policy
-from .privacy import plan_bands, shift_for
+from .privacy import plan_bands, raise_location, shift_for
+from .rare import RareValues
 from .rewrite import Ctx, district_name, place_psn, rename_file, rewrite_record, serialize
 from .translit import key, tokens_match
 
@@ -247,8 +248,15 @@ def main(argv: list[str] | None = None) -> int:
             ev = r.ev
             profiles[canon] = {"ages": list(ev.ages), "gender": next(iter(ev.genders)) if len(ev.genders) == 1 else None,
                                "district": next(iter(sorted(ev.districts)), None)}
-    bands = plan_bands(profiles, policy)
+    from .lexicon import districts as _districts
+    policy["_division_of"] = {canon: div for canon, div in _districts().values()}
+    bands, loc_level = plan_bands(profiles, policy)
     top = int(policy["age"].get("top_code", 80))
+    rare = None
+    if policy.get("rare_values", {}).get("enabled", True):
+        rare = RareValues(int(policy["rare_values"].get("max_profiles_rare", 3)))
+        rare.collect(recs)
+        rare.plan(rec_canon)
 
     # 6. propagate cluster names, then rewrite -------------------------------------
     for i, (_d, r) in enumerate(recs):
@@ -285,6 +293,11 @@ def main(argv: list[str] | None = None) -> int:
                 rewrite_record(rec, ctx)
                 if rec.loc != "@file":
                     place_psn(rec, ctx, d)
+                if i is not None and rare is not None and rare.apply(i, rec):
+                    rec.generalized = True
+                level = loc_level.get(canon, "district")
+                if i is not None and level != "district" and raise_location(rec, level, policy["_division_of"]):
+                    rec.generalized = True
                 for sl in rec.slots:
                     for sp in sl.spans:
                         if sp.etype in PII_TYPES:

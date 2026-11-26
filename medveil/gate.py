@@ -36,9 +36,9 @@ class Ledger:
             if len(d) >= 10:
                 self.digit_items.add(d[-10:] if etype == "PHONE" else d)
         elif etype == "MRN":
-            groups = re.findall(r"\d+", s)
-            if groups and len(groups[-1]) >= 5:
-                self.digit_items.add(groups[-1])
+            groups = [g for g in re.findall(r"\d+", s) if len(g) >= 5]
+            if groups:
+                self.digit_items.add(max(groups, key=len))
             if len(s) >= 5:
                 self.texts.add(s.casefold())
         elif etype in ("EMAIL", "PAN", "INSURANCE", "ABHA_ADDR"):

@@ -29,3 +29,6 @@ def test_schwa_deletion():
     assert deva_to_latin("अमरगंज") == "amarganj"
     assert deva_to_latin("प्रकाश") == "prakaash"
     assert deva_to_latin("सलमान") == "salmaan"
+    assert deva_to_latin("खुर्द") == "khurd"
+    assert deva_to_latin("उपेंद्र") == "upendra"
+    assert deva_to_latin("चंद्र") == "chandra"
