@@ -39,34 +39,35 @@ so the released data stays useful and the voter-list attacker gets little.</div>
 <img class="arch" src="architecture.png" alt="Ingest, learn, detect, link, privacy plan, rewrite, leak gate">
 <p>Two passes are needed because a name is often only recognisable once its owner is known: "Shahid sahab" in a
 nursing note, <span lang="hi">शाहिद</span> in a Hindi prescription and <code>Shahid_Mohammad</code> in a file name are found because the
-registration row (name, UHID, phone) was read first.</p>
+registration row was read first.</p>
 
 <h2>2. How each part works</h2>
 <ul>
-<li><b>Ingestion.</b> Format by content, not extension. UTF-8 (BOM or not), UTF-16, cp1252; mojibake, binary, markup,
-empty, truncated or over-deep JSON (linear depth scan, limit 200) and JSON behind <code>.csv</code> are quarantined
-with a reason code. Every cell, JSON leaf, key, header, file name and note becomes a rewritable slot.</li>
-<li><b>Detection.</b> On a normalized view (NFKC, zero-width removal, homoglyph folding, Indic digits, decoded
-base64 / <code>\u</code> / entities). A <i>protect layer</i> runs first: <code>Dr.</code> names, doses (<code>Dolo 650</code>,
+<li><b>Ingestion.</b> Format by content, not extension. UTF-8, UTF-16, cp1252; mojibake, binary (archives,
+executables, SQLite...), markup, empty, truncated, over-deep (linear scan) or <code>NaN</code> JSON, JSON behind
+<code>.csv</code>, symlinks and special files are quarantined with a reason code, never followed or unpacked. Every cell, leaf, key, header, file name and note becomes a slot.</li>
+<li><b>Detection.</b> On a normalized view (NFKC; zero-width and bidi marks removed; homoglyphs, diacritics,
+Unicode dashes, Indic, Arabic and full-width digits folded; <code>\u</code>, entities, %-encoding decoded), in
+linear time on degenerate text. A <i>protect layer</i> runs first: <code>Dr.</code> names, doses (<code>Dolo 650</code>,
 <code>1-0-1</code>), vitals, labs with units, ICD/LOINC codes, eponyms, K/C/O, H/O, <code>C/O &lt;complaint&gt;</code>,
 hospital wards, ASHA workers. Then identifiers (Aadhaar, masked Aadhaar, ABHA, every Indian phone format, PAN,
 PM-JAY, labelled IDs in English and Hindi), <b>ID shape induction</b> (unseen UHID formats learned from ID columns
 and matched with any separator), a multilingual header lexicon with value profiling, context names (labels,
 S/o-W/o-C/O, the name before a relation marker, honorifics, Hindi postpositions such as "Irfan <i>ka</i> BP",
-chat senders, a capitalised name next to a phone number) and Latin/Devanagari addresses.</li>
+chat senders, a capitalised name next to a phone number; any case after a strong cue) and Latin/Devanagari
+addresses. Base64/hex runs hiding PII (up to 3 levels deep) are removed whole.</li>
 <li><b>Cross-script key.</b> Our own Devanagari-to-Latin transliteration with schwa deletion plus one phonetic
 folding for both scripts: <span lang="hi">मोहम्मद शाहिद</span> = Mohd. Shahid = Shahid Mohammad; Reena = Rina.</li>
 <li><b>Linkage.</b> Rule ladder matching the dataset's own definition of "linkable": shared strong ID, shared
 phone, full name + DOB / relative / village with age within 1, given name + relative. A union-find refuses
 any merge whose pooled evidence contradicts itself (gender, DOB, Aadhaar, birth year, given name); fragments
 link only with exactly one candidate. Pseudonym: <code>PSN-</code> + 8 letters of HMAC-SHA256 keyed from
-<code>RAKSHA_SECRET</code>, written inside every linked record.</li>
+<code>RAKSHA_SECRET</code>, written into each linked record.</li>
 <li><b>Privacy layer.</b> One keyed date shift per patient (&plusmn;30 to 365 days, formats kept, stays exact); DOB
 suppressed; 10-year age bands, widened to 20 if fewer than 2 patients share (gender, band, district), 80+
 top-coded, one band per patient; house, mohalla, landmark, village, tehsil removed; district kept unless fewer
 than 3 patients share the class (then state); PIN to 3 digits; diagnoses and procedures shared by 2 or fewer
-patients published at ICD-10 chapter level.</li>
-<li><b>Security.</b> See section 5.</li>
+patients published as their ICD-10 chapter.</li>
 </ul>
 
 <h2>3. What makes it different</h2>
@@ -76,27 +77,32 @@ from the data at run time; unseen headers are typed by value profiling.</li>
 <li><b>Contradiction-proof linking</b> across three scripts and four hospitals with zero wrong merges.</li>
 <li><b>Measured privacy:</b> our re-implementation of attacks A1 to A7 and a policy sweep chose every
 privacy setting; held-out "chaos" data sets (new names, labels, headers, ID/date/phone formats, canaries)
-test generalization in CI on Python 3.10 to 3.13.</li>
+test generalization in CI.</li>
+<li><b>Built for a hostile evaluator:</b> 1,043 tweaked mentions (zero-width, diacritics, full-width, case, foreign
+digits, homoglyphs, base64) and 27 hostile files (executables, zip bombs, billion laughs, 10,000-deep JSON, an
+escaping symlink, 2 MB ReDoS bait) leak nothing.</li>
 </ul>
 
 <h2 class="pb">4. Privacy-utility trade-off (measured)</h2>
 <table>
 <tr><th>Data set</th><th class="n">PII leaked</th><th class="n">Canaries</th><th class="n">Medical values kept</th><th class="n">Link precision / recall</th><th class="n">Wrong merges</th></tr>
-<tr><td>Practice data (200 files, 48 patients)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">97.8%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
-<tr><td>Held-out chaos, seed 7 (all variants)</td><td class="n">0 / 3,234</td><td class="n">0 / 8</td><td class="n">97.9%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
-<tr><td>Held-out chaos, seed 11 (names, headers, IDs)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">98.1%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Practice (200 files, 48 patients)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">97.7%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Chaos seed 7 (all variants)</td><td class="n">0 / 3,234</td><td class="n">0 / 8</td><td class="n">97.7%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Chaos seed 11 (names, headers, IDs)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">97.9%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Adversarial seed 3</td><td class="n">0 / 3,245</td><td class="n">0 / 8</td><td class="n">97.7%</td><td class="n">1.00 / 0.99</td><td class="n">0</td></tr>
 <tr><td>Starter skeleton, for comparison</td><td class="n">84.1%</td><td class="n">4 / 4</td><td class="n">100%</td><td class="n">nothing linked</td><td class="n">-</td></tr>
 </table>
-<p>Before the chaos sets existed, the same pipeline leaked 14 pieces and 1 canary on seed 7 and lost 10% of links;
-each root cause was fixed generically (unseen Hindi ID labels, IDs with the year last, <code>+91</code> numbers read as
-Aadhaar, new relative/DOB headers), not by adding names.</p>
+<p>Each miss these sets exposed (14 leaks on chaos seed 7; tweaked names, encoded PII and a 158 s ReDoS run on the
+adversarial set) was fixed at its root, not by adding names. Our re-implementation of the official scoring
+(<code>tools/scorecard.py</code>, within 0.3 points of the published passthrough and redact-all baselines) estimates <b>95.9 / 100</b>.</p>
 
 <table>
 <tr><th>Policy (practice registry, our attacker)</th><th class="n">Attack risk</th><th class="n">Privacy pts (25)</th><th class="n">A4 re-id</th><th class="n">A5 targeted</th><th class="n">Values kept</th></tr>
-<tr><td>Identifiers removed, adaptive 10/20-year bands, district kept</td><td class="n">0.198</td><td class="n">20.05</td><td class="n">25.0%</td><td class="n">64.9%</td><td class="n">100.0%</td></tr>
-<tr><td>+ rare diagnoses generalized, state when the (gender, band, district) class has fewer than 2 patients</td><td class="n">0.133</td><td class="n">21.67</td><td class="n">12.5%</td><td class="n">46.9%</td><td class="n">97.5%</td></tr>
-<tr><td><b>+ class size raised to 3 (chosen)</b></td><td class="n"><b>0.109</b></td><td class="n"><b>22.28</b></td><td class="n"><b>4.2%</b></td><td class="n"><b>44.3%</b></td><td class="n"><b>97.8%</b></td></tr>
-<tr><td>State for everyone</td><td class="n">0.109</td><td class="n">22.29</td><td class="n">4.2%</td><td class="n">44.3%</td><td class="n">96.0%</td></tr>
+<tr><td>Bands, rare diagnoses generalized, district kept</td><td class="n">0.185</td><td class="n">20.38</td><td class="n">25.0%</td><td class="n">57.7%</td><td class="n">98.8%</td></tr>
+<tr><td>+ state if (gender, band, district) has &lt; 2 patients</td><td class="n">0.124</td><td class="n">21.91</td><td class="n">10.4%</td><td class="n">44.2%</td><td class="n">98.4%</td></tr>
+<tr><td><b>+ class size raised to 3 (chosen)</b></td><td class="n"><b>0.101</b></td><td class="n"><b>22.46</b></td><td class="n"><b>2.1%</b></td><td class="n"><b>43.0%</b></td><td class="n"><b>97.7%</b></td></tr>
+<tr><td>Same, rare diagnoses kept</td><td class="n">0.116</td><td class="n">22.10</td><td class="n">2.1%</td><td class="n">50.2%</td><td class="n">98.9%</td></tr>
+<tr><td>State for everyone</td><td class="n">0.101</td><td class="n">22.48</td><td class="n">2.1%</td><td class="n">43.0%</td><td class="n">96.9%</td></tr>
 </table>
 <p><b>Why these settings.</b> On the practice registry, gender + 5-year band + district left 20 of 48 patients unique;
 adaptive 10/20-year bands leave 5. A truthful DOB would give the birth year and undo the bands, so it is suppressed
@@ -105,9 +111,9 @@ days) and keep every interval and stay length exact. We keep the district for mo
 research needs it, and give it up only where the class is rare; "state for everyone" buys nothing more. Eponym
 diagnoses stay exact: they are scored meaning-trap values. The remaining risk is the targeted attack: a
 patient whose condition is shared by few people of the same gender and band can still be singled out.
-Direct exposure, pseudonym inversion (A6) and stable pseudonyms across releases (A7) are 0%.</p>
+Direct exposure (A1) and pseudonym inversion (A6) are 0%; across two releases no pseudonym and 4.3% of dates stay the same (A7).</p>
 <p><b>Speed.</b> Practice data: 2.2 s and 55 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
-41 s and 216 MB on a laptop. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
+41 s and 216 MB on a laptop; the 227-file adversarial set: 42 s and 345 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
 
 <h2>5. Security design (assume the server is breached)</h2>
 <div class="two"><div><ul>
@@ -131,7 +137,8 @@ separators) and address string before it is written; still dirty means quarantin
 attacker and hidden registry will differ.</li>
 <li>Rarity is judged within one release, so on a small release some common diagnoses get generalized.</li>
 <li>An all-lowercase name with no label, honorific, relation or phone nearby can be missed unless the same person
-appears in structured data elsewhere. <code>.jsonl</code> is treated as text.</li>
+appears in structured data elsewhere. <code>.jsonl</code> is treated as text. A text file starting with <code>&lt;</code> is
+quarantined as markup even if it is a plain note.</li>
 </ul>
 </body>
 </html>
