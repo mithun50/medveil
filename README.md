@@ -11,19 +11,23 @@ quasi-identifiers an attacker with a voter list would use.
 
 | Measured on | PII leaked | Canaries | Medical values kept | Linking precision / recall | Wrong merges | Est. attack risk |
 |---|---:|---:|---:|---|---:|---:|
-| practice data (`dev/`) | 0 of 3,230 | 0 of 4 | 97.7% | 1.00 / 1.00 | 0 | 0.102 |
-| held-out chaos set, seed 7 | 0 of 3,234 | 0 of 8 | 97.7% | 1.00 / 1.00 | 0 | |
-| held-out chaos set, seed 11 | 0 of 3,230 | 0 of 4 | 97.9% | 1.00 / 1.00 | 0 | |
+| practice data (`dev/`) | 0 of 3,230 | 0 of 4 | 97.7% | 1.00 / 1.00 | 0 | 0.052 |
+| chaos sets, seeds 7 and 11 | 0 of 3,234 / 3,230 | 0 of 8 / 4 | 97.8% / 97.7% | 1.00 / 1.00 | 0 | |
+| fresh chaos sets, seeds 21 to 40 (20 sets) | 0 in every set | 0 | 97.3% to 97.7% | 1.00 / 0.98 to 1.00 | 0 | |
 | adversarial set, seed 3 (tweaked PII, encoded payloads, 27 hostile files) | 0 of 3,245 | 0 of 8 | 97.7% | 1.00 / 0.99 | 0 | |
 
 "Chaos sets" are our own rewrites of the practice data with new patient names, labels,
-headers, ID, date and phone formats and new canaries (`tools/chaos_gen.py`). The adversarial
+headers, ID, date and phone formats and new canaries (`tools/chaos_gen.py`). Seeds 7 and 11
+were used while developing, so they stopped measuring generalization: fresh seeds 21 to 30
+then leaked 1 to 8 pieces each and seed 25 linked only 32% of records, until the header and
+label gaps they exposed were fixed. Seeds 31 to 40 were checked only after those fixes. CI
+gates all 22 sets. The adversarial
 set (`tools/adversarial_gen.py`) tweaks 1,043 PII mentions so they look different but
 normalize back to the original, wraps PII in encodings and adds hostile files (see
 [Robustness](#robustness-against-tweaked-and-hostile-input)). Attack risk is from our
 re-implementation of the organizers' attacks A1 to A7 (`tools/redteam.py`).
 
-Our estimate of the official score on the practice data is **95.93 of 100**
+Our estimate of the official score on the practice data is **96.98 of 100**
 (`tools/scorecard.py`, a re-implementation of `scoring.toml`). On the published baselines it
 gives -19.74 for passthrough (official -19.48) and 22.61 for redact-all (official 22.75). The
 starter skeleton, for comparison, leaks 84.1% of personal data and links nobody.
@@ -57,7 +61,7 @@ Development:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                                             # 255 tests
+python -m pytest -q                                             # 332 tests
 python tools/ci_gate.py --input ../Secret-Wards-ToolKit/dev/input --truth ../Secret-Wards-ToolKit/dev/truth/truth.json
 python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 7
 python tools/adversarial_gen.py --kit ../Secret-Wards-ToolKit --out adv --seed 3
@@ -196,7 +200,7 @@ order-insensitively with Jaro-Winkler on these keys.
 |---|---|
 | dates | one keyed shift per patient, plus or minus 30 to 365 days, never 0, same format as the input; intervals and stay lengths stay exact |
 | date of birth | suppressed (a truthful DOB gives the birth year and undoes age banding) |
-| age | 10-year band if 2+ patients share (gender, band, district), else 20 years; 80+ top-coded; one band for all of a patient's records, always containing every true age |
+| age | 10-year band if 2+ patients share (gender, band, district), else 20 years; 80+ top-coded; one band for all of a patient's records, always containing every true age. Then, against the targeted attack: patients who publish the same diagnosis or procedure are grouped by gender and published district, sorted by age and cut into runs of at least 3, and each band is widened to cover its run, so at least 3 patients fit the demographics of any one of them |
 | house, mohalla, landmark, village, tehsil | removed; village and tehsil fields become the district |
 | district | kept, unless fewer than 3 patients share (gender, band, district): then the state |
 | PIN | first 3 digits in PIN fields (`229***`), removed in text |
@@ -261,30 +265,35 @@ Result: 0 of 3,245 PII mentions and 0 of 8 canaries survive.
 The whole adversarial set (227 files) runs in 33 s with a 344 MB peak on a laptop, down from
 158 s and 616 MB before chunked detection.
 
+Scale: 10 chaos sets together (2,000 files, 8,160 records) run in 43 to 48 s with a 205 MB peak
+(was 105 s). Linking used to compare every pair of patients sharing a surname; candidates are
+now indexed by the clue that could link them (a shared DOB, relatives or villages), with
+byte-identical output, so the run time grows about linearly with the input.
+
 ## Privacy and utility trade-off (measured on the practice data)
 
-`tools/sweep.py` runs each policy through our attacker and the utility check (figures from the
-current pipeline; the sweep uses its own pair of secrets, so risk can differ from the headline
-by 0.001).
+`tools/sweep.py` runs each policy through our attacker, the utility check and
+`tools/scorecard.py` (the sweep uses its own pair of secrets, so figures can differ from the
+headline by about 0.01).
 
-| Policy | Est. attack risk | Est. privacy points (of 25) | Medical values kept |
-|---|---:|---:|---:|
-| district kept everywhere (no state fallback) | 0.185 | 20.38 | 98.8% |
-| state fallback at k=2 | 0.124 | 21.91 | 98.4% |
-| state fallback at k=3, no rare-value generalization | 0.116 | 22.10 | 98.9% |
-| 20-year age bands for everyone, k=3 | 0.105 | 22.37 | 97.9% |
-| **state fallback at k=3, rare values shared by 2 or fewer generalized (chosen)** | **0.101** | **22.46** | **97.7%** |
-| rare values shared by 3 or fewer generalized | 0.101 | 22.46 | 96.7% |
-| state everywhere | 0.101 | 22.48 | 96.9% |
+| Policy | Est. attack risk | A5 targeted | Utility (of 20) | Est. total (of 100) |
+|---|---:|---:|---:|---:|
+| district kept everywhere (no state fallback) | 0.171 | 0.541 | 18.96 | 94.65 |
+| state fallback at k=3, no condition-aware bands (shipped before) | 0.101 | 0.430 | 18.51 | 95.96 |
+| state fallback at k=2 | 0.077 | 0.237 | 18.61 | 96.66 |
+| condition-aware bands with runs of 2 | 0.076 | 0.336 | 18.31 | 96.40 |
+| **state fallback at k=3, condition-aware bands with runs of 3 (chosen)** | **0.051** | **0.216** | **18.29** | **96.99** |
+| same, no rare-value generalization | 0.066 | 0.289 | 18.57 | 96.91 |
+| state everywhere | 0.046 | 0.195 | 18.17 | 97.00 |
 
-The first pipeline (identifiers removed, district kept, no rare values) measured 0.198. Date of
-birth shifted instead of suppressed scored lower in our estimator (94.87 against 95.93), because
-a shifted DOB still narrows the profile attack (A4 risk 0.229).
-
-We keep the district for most patients (it matters for public-health research) and give it up
-only for patients whose combination is rare. The remaining risk is mostly the targeted attack
-(A5): a patient whose condition is shared by few people of the same gender and age band can
-still be singled out by someone who knows that condition.
+We keep the district for most patients where it is safe (it matters for public-health
+research); "state everywhere" scores the same. The condition-aware bands were the largest
+single gain: before them, an attacker who knew that a patient had "Tuberculosis of lung"
+found exactly one consistent profile among the 6 that carry it. Tried and rejected:
+generalizing a diagnosis whenever its (gender, band, district) class is small (total 95.88,
+medical values kept 97.7% to 91.9%), and judging age bands against the published location
+(+0.03, within noise). Date of birth shifted instead of suppressed scored lower (94.87 against
+95.93 at the time), because a shifted DOB still narrows the profile attack.
 
 ## Models
 
@@ -298,6 +307,12 @@ gazetteers and our own transliteration code.
   practice registry. The official attacker and hidden registry will differ.
 - Rare-value generalization is decided within one release; on a very small release common
   diagnoses can look rare and get generalized.
+- Condition-aware age bands can be wide (`20-69`) when few patients share a diagnosis, which
+  costs age precision; on a larger release the groups are bigger and the bands narrower. The
+  length of stay is kept exact for research, so an attacker who knows a stay of a rare length
+  can still single out that admission.
+- All chaos sets come from our own generator. Fresh seeds found real gaps, so the hidden
+  data, made by someone else, will likely find more.
 - Names written entirely in lowercase with no context cue (no label, honorific, relation or
   phone nearby) can be missed unless the same person appears elsewhere in structured data.
 - A text file that starts with `<` is quarantined as markup even when it is a plain note. In
@@ -314,7 +329,7 @@ main.py                 entry point (raksha.toml run command)
 config/policy.yaml      privacy policy (every value measured with tools/sweep.py)
 medveil/                the pipeline (standard library + cryptography + PyYAML)
 tools/                  dev only: redteam, chaos_gen, adversarial_gen, scorecard, sweep, ci_gate,
-                        fhir_validate, devcheck, build_lexicons
+                        gen_detail, fhir_validate, devcheck, build_lexicons
 tests/                  unit and end-to-end tests (synthetic sentences written by us)
 docs/                   implementation plan and the 2-page brief
 ```
