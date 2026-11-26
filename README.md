@@ -13,7 +13,7 @@ quasi-identifiers an attacker with a voter list would use.
 |---|---:|---:|---:|---|---:|---:|
 | practice data (`dev/`) | 0 of 3,230 | 0 of 4 | 97.8% | 1.00 / 1.00 | 0 | 0.109 |
 | held-out chaos set, seed 7 | 0 of 3,234 | 0 of 8 | 97.9% | 1.00 / 1.00 | 0 | |
-| held-out chaos set, seed 11 | 0 of 3,230 | 0 of 4 | 97.1% | 1.00 / 1.00 | 0 | |
+| held-out chaos set, seed 11 | 0 of 3,230 | 0 of 4 | 98.1% | 1.00 / 1.00 | 0 | |
 
 "Chaos sets" are our own rewrites of the practice data with new patient names, labels,
 headers, ID, date and phone formats and new canaries (`tools/chaos_gen.py`). Attack risk is
@@ -198,8 +198,8 @@ the memory of a running process.
 
 | Policy | Est. attack risk | Est. privacy points (of 25) | Medical values kept |
 |---|---:|---:|---:|
-| identifiers removed only (first pipeline) | 0.198 | 20.05 | 100.0% |
-| + adaptive bands, district kept | 0.184 | 20.41 | 97.9% |
+| identifiers removed, adaptive bands, district kept (first pipeline) | 0.198 | 20.05 | 100.0% |
+| + rare values only | 0.184 | 20.41 | 97.9% |
 | + state fallback at k=2 | 0.133 | 21.67 | 97.5% |
 | **+ state fallback at k=3 and rare values (chosen)** | **0.109** | **22.28** | **97.8%** |
 | state everywhere | 0.109 | 22.29 | 96.0% |

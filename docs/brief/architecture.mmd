@@ -1,0 +1,11 @@
+flowchart LR
+    IN[("Hospital dump<br/>CSV TSV JSON FHIR text<br/>3 scripts, 4 encodings")] --> ING["Ingest<br/>sniff by content<br/>decode, depth limit"]
+    ING --> LRN["Learn<br/>ID shapes, known names<br/>villages, date order"]
+    LRN --> DET["Detect<br/>protect clinical spans<br/>IDs, context names<br/>addresses"]
+    DET --> LNK["Link<br/>rule ladder +<br/>cannot-link union-find<br/>HMAC pseudonyms"]
+    LNK --> PRV["Privacy plan<br/>per-patient date shift<br/>adaptive bands, k-anon<br/>location, rare values"]
+    PRV --> RW["Rewrite<br/>original format<br/>name propagation"]
+    RW --> GT{"Leak<br/>gate"}
+    GT -->|clean| OUT[("sanitized/<br/>report.json<br/>records.jsonl")]
+    ING -->|unsafe| Q[("AES-GCM<br/>quarantine")]
+    GT -->|dirty| Q

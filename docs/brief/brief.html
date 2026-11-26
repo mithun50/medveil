@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MedVeil - Project Brief</title>
+<style>
+  @page { size: A4; margin: 11mm 12mm 11mm 12mm; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10pt; line-height: 1.32; color: #111; margin: 0; }
+  h1 { font-size: 15pt; margin: 0 0 1mm 0; }
+  h2 { font-size: 11pt; margin: 3mm 0 1mm 0; color: #1f3b73; border-bottom: 1px solid #c9d3e6; padding-bottom: 0.5mm; }
+  p { margin: 0.8mm 0; }
+  ul { margin: 0.5mm 0 0.5mm 4.5mm; padding: 0; }
+  li { margin: 0.4mm 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1mm 0; font-size: 9.5pt; }
+  th, td { border: 1px solid #c9d3e6; padding: 0.6mm 1.4mm; text-align: left; vertical-align: top; }
+  th { background: #eef2fa; }
+  td.n, th.n { text-align: right; white-space: nowrap; }
+  .meta { font-size: 9.5pt; color: #333; margin-bottom: 1.5mm; }
+  .pitch { background: #f4f7fc; border-left: 3px solid #1f3b73; padding: 1.2mm 2mm; margin: 1.5mm 0; }
+  img.arch { width: 100%; margin: 1mm 0; }
+  .two { display: flex; gap: 4mm; }
+  .two > div { flex: 1; }
+  .pb { page-break-before: always; }
+  b { color: #0b1f45; }
+</style>
+</head>
+<body>
+
+<h1>MedVeil: a privacy firewall for multilingual Indian hospital records</h1>
+<div class="meta"><b>Track 3, Secret Wards</b> &middot; Team MedVeil: Mithun Gowda B, Pavan, Sandeep, Sujay &middot;
+Repo: github.com/mithun50/medveil &middot; Offline, CPU-only, no LLM, no ML model</div>
+
+<div class="pitch"><b>Pitch.</b> MedVeil finds personal data from <i>context</i> in English, Devanagari and Hinglish
+instead of from lists of names, links every patient across files, scripts and hospitals with a
+contradiction-proof linker, and decides each quasi-identifier per patient from a measured attack,
+so the released data stays useful and the voter-list attacker gets little.</div>
+
+<h2>1. Architecture</h2>
+<img class="arch" src="architecture.png" alt="Ingest, learn, detect, link, privacy plan, rewrite, leak gate">
+<p>Two passes are needed because a name is often only recognisable once its owner is known: "Shahid sahab" in a
+nursing note, <span lang="hi">शाहिद</span> in a Hindi prescription and <code>Shahid_Mohammad</code> in a file name are found because the
+registration row (name, UHID, phone) was read first.</p>
+
+<h2>2. How each part works</h2>
+<ul>
+<li><b>Ingestion.</b> Format by content, not extension. UTF-8 (BOM or not), UTF-16, cp1252; mojibake, binary, markup,
+empty, truncated or over-deep JSON (linear depth scan, limit 200) and JSON behind <code>.csv</code> are quarantined
+with a reason code. Every cell, JSON leaf, key, header, file name and note becomes a rewritable slot.</li>
+<li><b>Detection.</b> On a normalized view (NFKC, zero-width removal, homoglyph folding, Indic digits, decoded
+base64 / <code>\u</code> / entities). A <i>protect layer</i> runs first: <code>Dr.</code> names, doses (<code>Dolo 650</code>,
+<code>1-0-1</code>), vitals, labs with units, ICD/LOINC codes, eponyms, K/C/O, H/O, <code>C/O &lt;complaint&gt;</code>,
+hospital wards, ASHA workers. Then identifiers (Aadhaar, masked Aadhaar, ABHA, every Indian phone format, PAN,
+PM-JAY, labelled IDs in English and Hindi), <b>ID shape induction</b> (unseen UHID formats learned from ID columns
+and matched with any separator), a multilingual header lexicon with value profiling, context names (labels,
+S/o-W/o-C/O, the name before a relation marker, honorifics, Hindi postpositions such as "Irfan <i>ka</i> BP",
+chat senders, a capitalised name next to a phone number) and Latin/Devanagari addresses.</li>
+<li><b>Cross-script key.</b> Our own Devanagari-to-Latin transliteration with schwa deletion plus one phonetic
+folding for both scripts: <span lang="hi">मोहम्मद शाहिद</span> = Mohd. Shahid = Shahid Mohammad; Reena = Rina.</li>
+<li><b>Linkage.</b> Rule ladder matching the dataset's own definition of "linkable": shared strong ID, shared
+phone, full name + DOB / relative / village with age within 1, given name + relative. A union-find refuses
+any merge whose pooled evidence contradicts itself (gender, DOB, Aadhaar, birth year, given name); fragments
+link only with exactly one candidate. Pseudonym: <code>PSN-</code> + 8 letters of HMAC-SHA256 keyed from
+<code>RAKSHA_SECRET</code>, written inside every linked record.</li>
+<li><b>Privacy layer.</b> One keyed date shift per patient (&plusmn;30 to 365 days, formats kept, stays exact); DOB
+suppressed; 10-year age bands, widened to 20 if fewer than 2 patients share (gender, band, district), 80+
+top-coded, one band per patient; house, mohalla, landmark, village, tehsil removed; district kept unless fewer
+than 3 patients share the class (then state); PIN to 3 digits; diagnoses and procedures shared by 2 or fewer
+patients published at ICD-10 chapter level.</li>
+<li><b>Security.</b> See section 5.</li>
+</ul>
+
+<h2>3. What makes it different</h2>
+<ul>
+<li><b>Context over memory:</b> canaries (names in no list) are caught by context; unseen ID formats are learned
+from the data at run time; unseen headers are typed by value profiling.</li>
+<li><b>Contradiction-proof linking</b> across three scripts and four hospitals with zero wrong merges.</li>
+<li><b>Measured privacy:</b> our re-implementation of attacks A1 to A7 and a policy sweep chose every
+privacy setting; held-out "chaos" data sets (new names, labels, headers, ID/date/phone formats, canaries)
+test generalization in CI on Python 3.10 to 3.13.</li>
+</ul>
+
+<h2 class="pb">4. Privacy-utility trade-off (measured)</h2>
+<table>
+<tr><th>Data set</th><th class="n">PII leaked</th><th class="n">Canaries</th><th class="n">Medical values kept</th><th class="n">Link precision / recall</th><th class="n">Wrong merges</th></tr>
+<tr><td>Practice data (200 files, 48 patients)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">97.8%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Held-out chaos, seed 7 (all variants)</td><td class="n">0 / 3,234</td><td class="n">0 / 8</td><td class="n">97.9%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Held-out chaos, seed 11 (names, headers, IDs)</td><td class="n">0 / 3,230</td><td class="n">0 / 4</td><td class="n">98.1%</td><td class="n">1.00 / 1.00</td><td class="n">0</td></tr>
+<tr><td>Starter skeleton, for comparison</td><td class="n">84.1%</td><td class="n">4 / 4</td><td class="n">100%</td><td class="n">nothing linked</td><td class="n">-</td></tr>
+</table>
+<p>Before the chaos sets existed, the same pipeline leaked 14 pieces and 1 canary on seed 7 and lost 10% of links;
+each root cause was fixed generically (unseen Hindi ID labels, IDs with the year last, <code>+91</code> numbers read as
+Aadhaar, new relative/DOB headers), not by adding names.</p>
+
+<table>
+<tr><th>Policy (practice registry, our attacker)</th><th class="n">Attack risk</th><th class="n">Privacy pts (25)</th><th class="n">A4 re-id</th><th class="n">A5 targeted</th><th class="n">Values kept</th></tr>
+<tr><td>Identifiers removed, adaptive 10/20-year bands, district kept</td><td class="n">0.198</td><td class="n">20.05</td><td class="n">25.0%</td><td class="n">64.9%</td><td class="n">100.0%</td></tr>
+<tr><td>+ rare diagnoses generalized, state when the (gender, band, district) class has fewer than 2 patients</td><td class="n">0.133</td><td class="n">21.67</td><td class="n">12.5%</td><td class="n">46.9%</td><td class="n">97.5%</td></tr>
+<tr><td><b>+ class size raised to 3 (chosen)</b></td><td class="n"><b>0.109</b></td><td class="n"><b>22.28</b></td><td class="n"><b>4.2%</b></td><td class="n"><b>44.3%</b></td><td class="n"><b>97.8%</b></td></tr>
+<tr><td>State for everyone</td><td class="n">0.109</td><td class="n">22.29</td><td class="n">4.2%</td><td class="n">44.3%</td><td class="n">96.0%</td></tr>
+</table>
+<p><b>Why these settings.</b> On the practice registry, gender + 5-year band + district left 20 of 48 patients unique;
+adaptive 10/20-year bands leave 5. A truthful DOB would give the birth year and undo the bands, so it is suppressed
+(DOB is a small part of the utility score). Per-patient shifts defeat global-shift recovery (our attacker recovers 0
+days) and keep every interval and stay length exact. We keep the district for most patients because public-health
+research needs it, and give it up only where the class is rare; "state for everyone" buys nothing more. Eponym
+diagnoses stay exact: they are scored meaning-trap values. The remaining risk is the targeted attack: a
+patient whose condition is shared by few people of the same gender and band can still be singled out.
+Direct exposure, pseudonym inversion (A6) and stable pseudonyms across releases (A7) are 0%.</p>
+<p><b>Speed.</b> Practice data: 2.2 s and 55 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
+41 s and 216 MB on a laptop. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
+
+<h2>5. Security design (assume the server is breached)</h2>
+<div class="two"><div><ul>
+<li><b>No plaintext intermediates:</b> all processing in memory, no temp files.</li>
+<li><b>Keys away from data:</b> <code>RAKSHA_SECRET</code> read once and removed from the environment; separate
+HKDF-SHA256 keys for pseudonyms, date shifts, file-name codes and the vault, held only in memory.</li>
+<li><b>Encrypted quarantine:</b> refused files are stored AES-256-GCM encrypted with per-file keys wrapped by
+the vault key (optionally a separate <code>RAKSHA_VAULT_KEY</code>), input hash as associated data, HMAC blob names.</li>
+</ul></div><div><ul>
+<li><b>PII-free channels:</b> stdout is one line of counts; exception hooks print only the class name; the report
+names files by SHA-256; file names holding PII are renamed.</li>
+<li><b>Residual leak gate:</b> each output file is re-scanned for every detected name token, digit ID (any
+separators) and address string before it is written; still dirty means quarantined.</li>
+<li><b>No network:</b> sockets raise; input opened read-only.</li>
+</ul></div></div>
+
+<h2>6. Known limitations</h2>
+<ul>
+<li>PDF, images and XML are quarantined, not cleaned (no OCR).</li>
+<li>Attack numbers come from our own reading of the published attacks on the practice registry; the official
+attacker and hidden registry will differ.</li>
+<li>Rarity is judged within one release, so on a small release some common diagnoses get generalized.</li>
+<li>An all-lowercase name with no label, honorific, relation or phone nearby can be missed unless the same person
+appears in structured data elsewhere. <code>.jsonl</code> is treated as text.</li>
+</ul>
+</body>
+</html>

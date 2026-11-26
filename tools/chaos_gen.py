@@ -13,7 +13,12 @@ Output: <out>/<seed>/input/... and <out>/<seed>/truth/truth.json (same schema as
 practice key). Every transformation is deterministic from --seed. Replacements are made
 per file on decoded text, using the truth surfaces of that file, longest first; a surface
 that cannot be found (or sits inside a protected doctor name / medical probe) is skipped
-and counted. Never imported by the pipeline.
+and counted. JSON string literals written with \\uXXXX escapes are edited on their decoded
+value and written back escaped. The dates variant re-spells D/M/Y, M/D/Y and ISO dates in
+text, CSV and TSV, and non-ISO DOB values in JSON (ISO stays ISO there). A patient's UHID in
+the key changes only if that identifier was rewritten in at least one file. Input files
+that truth.json does not describe are copied unchanged, with a warning count. Never
+imported by the pipeline.
 """
 from __future__ import annotations
 
@@ -341,7 +346,12 @@ def DATE_FMT_HINDI(d):
 
 
 DATE_RX = re.compile(r"(\d{1,2})([/.\-])(\d{1,2})\2(\d{4})")
+ISO_DATE_RX = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 DATES_SHARE = 60  # percent of eligible files whose dates are rewritten
+JSON_FORMATS = ("json", "fhir")
+# one JSON string literal, escapes included (used to edit \uXXXX-escaped values)
+JSON_STR_RE = re.compile(r'"(?:[^"\\\n]|\\.)*"')
+JSON_UESC_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 CANARY_TEMPLATES = {
     "discharge": "Informant: {name} {phone}",
@@ -482,6 +492,50 @@ def csv_shape(text: str, delim: str):
         return [len(r) for r in csv.reader(io.StringIO(text, newline=""), delimiter=delim)]
     except csv.Error:
         return None
+
+
+def json_literal_like(old_lit: str, value: str) -> str:
+    """Encode value as a JSON string literal in the style of old_lit: \\uXXXX escapes for
+    non-ASCII text when old_lit used them (with the same hex case), raw UTF-8 otherwise."""
+    escapes = JSON_UESC_RE.findall(old_lit)
+    lit = json.dumps(value, ensure_ascii=bool(escapes))
+    if escapes and any(c in "ABCDEF" for e in escapes for c in e):
+        lit = JSON_UESC_RE.sub(lambda m: "\\u" + m.group(1).upper(), lit)
+    return lit
+
+
+def escaped_json_strings(text: str):
+    """(start, end, decoded) for every JSON string literal that uses \\uXXXX escapes."""
+    for m in JSON_STR_RE.finditer(text):
+        lit = m.group(0)
+        if "\\u" not in lit:
+            continue
+        try:
+            val = json.loads(lit)
+        except ValueError:
+            continue
+        if isinstance(val, str):
+            yield m.start(), m.end(), val
+
+
+def map_escaped_json(text: str, fn):
+    """Apply fn to the decoded value of every escaped JSON string literal and re-encode
+    the changed ones in their original style. Returns (text, literals changed)."""
+    parts, pos, n = [], 0, 0
+    for s, e, val in list(escaped_json_strings(text)):
+        new = fn(val)
+        if new != val:
+            parts.append(text[pos:s])
+            parts.append(json_literal_like(text[s:e], new))
+            pos = e
+            n += 1
+    parts.append(text[pos:])
+    return "".join(parts), n
+
+
+def decoded_json_text(text: str) -> str:
+    """Decoded escaped string values, so truth checks see "\\u0915..." as the letters."""
+    return "\n".join(v for _, _, v in escaped_json_strings(text))
 
 
 def practice_vocabulary(kit: Path, truth: dict) -> set[str]:
@@ -766,6 +820,8 @@ class Generator:
         self.names = NameMapper(truth, seed, self.vocab, self.canary_pool) if "names" in variants else None
         self.stats = defaultdict(Counter)
         self.practice_digits = self._practice_digits()
+        # canonical new form of every MRN that was rewritten in at least one file
+        self.ids_replaced: set[str] = set()
 
     # -- per-surface transforms ------------------------------------------------
     def new_id(self, s: str, filename: bool) -> str | None:
@@ -800,7 +856,7 @@ class Generator:
         return None
 
     def date_format(self, f: dict, fkey: str):
-        if f.get("format") in ("csv", "tsv"):
+        if f.get("format") in ("csv", "tsv") + JSON_FORMATS:
             fmts = list(DATE_FMTS_CSV)
         else:
             fmts = list(DATE_FMTS_TEXT)
@@ -809,8 +865,23 @@ class Generator:
         return pick(fmts, self.seed, "datefmt", fkey)
 
     def new_date(self, s: str, f: dict, fkey: str, known: set[str]) -> str | None:
+        """New spelling of a known date: D/M/Y, M/D/Y (by date_hint) or ISO YYYY-MM-DD.
+
+        ISO dates in JSON and FHIR stay ISO (FHIR birthDate and most JSON exports must be
+        ISO); everywhere else the date moves to this file's seeded format."""
+        if not known:
+            return None
+        m = ISO_DATE_RX.fullmatch(s)
+        if m:
+            if f.get("format") in JSON_FORMATS:
+                return None
+            try:
+                dt = date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except ValueError:
+                return None
+            return self.date_format(f, fkey)(dt) if dt.isoformat() in known else None
         m = DATE_RX.fullmatch(s)
-        if not m or not known:
+        if not m:
             return None
         a, b, y = int(m.group(1)), int(m.group(3)), int(m.group(4))
         order = [(b, a), (a, b)] if f.get("date_hint") == "mdy" else [(a, b), (b, a)]
@@ -824,7 +895,7 @@ class Generator:
         return None
 
     def dates_selected(self, f: dict, fkey: str) -> bool:
-        if f.get("format") not in ("text", "csv", "tsv") or f.get("category") == "clean":
+        if f.get("format") not in ("text", "csv", "tsv") + JSON_FORMATS or f.get("category") == "clean":
             return False
         if f.get("expect") != "sanitize":
             return False
@@ -856,7 +927,10 @@ class Generator:
 
     # -- labels / headers ------------------------------------------------------
     def fill_json_name_parts(self, text: str, fc: dict):
-        """Map FHIR "given" / "family" values that consist of this file's own name tokens."""
+        """Map FHIR "given" / "family" values that consist of this file's own name tokens.
+
+        Values are decoded first, so a \\uXXXX-escaped Devanagari name is mapped like a
+        plain one, then written back in the literal's own style (escaped or raw UTF-8)."""
         toks = set()
         for u in fc["units"].values():
             for e in u["entities"]:
@@ -868,6 +942,8 @@ class Generator:
 
         def one(val: str) -> str:
             nonlocal n
+            if not 1 <= len(val) <= 60 or "\n" in val:
+                return val
             words = WORD_RE.findall(val)
             if not words or WORD_RE.sub("", val).strip(" ._-"):
                 return val
@@ -878,10 +954,19 @@ class Generator:
             n += new != val
             return new
 
-        def strings(m):
-            return m.group(1) + re.sub(r'"([^"\\\n]{1,60})"', lambda s: '"' + one(s.group(1)) + '"', m.group(2))
+        def literal(m):
+            lit = m.group(0)
+            try:
+                val = json.loads(lit)
+            except ValueError:
+                return lit
+            new = one(val) if isinstance(val, str) else val
+            return lit if new == val else json_literal_like(lit, new)
 
-        text = re.sub(r'("family"\s*:\s*)("[^"\\\n]{1,60}")', strings, text)
+        def strings(m):
+            return m.group(1) + JSON_STR_RE.sub(literal, m.group(2))
+
+        text = re.sub(r'("family"\s*:\s*)("(?:[^"\\\n]|\\.){1,400}")', strings, text)
         text = re.sub(r'("given"\s*:\s*)(\[[^\]]*\])', strings, text)
         return text, n
 
@@ -1054,6 +1139,8 @@ class Generator:
             except (UnicodeError, LookupError):
                 text = None
         dates_on = "dates" in self.V and text is not None and self.dates_selected(f, fkey)
+        # in JSON / FHIR only DOB values are re-spelled (plus their copies in "exclude")
+        dob_surfaces = {e["surface"] for u in fc["units"].values() for e in u["entities"] if e["type"] == "DOB"}
 
         content_map, fname_map, desired, exclude_new = {}, {}, [], {}
         for u in fc["units"].values():
@@ -1075,6 +1162,8 @@ class Generator:
                 desired.append((e, new))
             if dates_on:
                 for s in u.get("exclude") or []:
+                    if fmt in JSON_FORMATS and s not in dob_surfaces:
+                        continue
                     new = self.new_date(s, f, fkey, known)
                     if new and new != s and content_map.get(s, new) == new:
                         content_map[s] = new
@@ -1103,6 +1192,12 @@ class Generator:
                 for s, e_, _ in b64_blobs(new_text):
                     mask[s:e_] = b"\x01" * (e_ - s)
                 new_text, _, _ = apply_map(new_text, content_map, mask)
+                if fmt in JSON_FORMATS:
+                    # "\u0915\u092e..." literals hide surfaces from the raw-text pass above:
+                    # replace on the decoded value and write it back escaped
+                    new_text, n = map_escaped_json(
+                        new_text, lambda v: apply_map(v, content_map, protect_mask(v, guard))[0])
+                    file_notes["json_escaped_strings"] += n
 
             if self.names is not None and fmt in ("json", "fhir"):
                 # Structured name parts ("given": ["Salma"], "family": "Ansari") are not truth
@@ -1188,9 +1283,15 @@ class Generator:
 
         # truth updates: only surfaces that really are in the new file
         hay = (new_text or "") + "\n" + "\n".join(dec for _, _, dec in b64_blobs(new_text or ""))
+        if fmt in JSON_FORMATS and new_text:
+            hay += "\n" + decoded_json_text(new_text)
         for e, new in desired:
             where = new_base if e["channel"] == "filename" else hay
             if new in where:
+                if e["type"] == "MRN":
+                    canon = self.new_id(e["surface"].upper(), False)
+                    if canon:
+                        self.ids_replaced.add(canon)
                 self.update_entity(e, new)
                 st["replaced"][e["type"]] += 1
             else:
@@ -1205,6 +1306,8 @@ class Generator:
         # consistency: nothing that should survive may disappear
         if text is not None and new_text != text:
             old_hay = text + "\n" + "\n".join(dec for _, _, dec in b64_blobs(text))
+            if fmt in JSON_FORMATS:
+                old_hay += "\n" + decoded_json_text(text)
             for p in probes:
                 if p in old_hay and p not in hay:
                     st["notes"]["preserve_lost"] += 1
@@ -1298,7 +1401,7 @@ def main(argv=None) -> int:
         new_files[new_rel] = fc
         changed += did_change
         renamed += new_rel != rel
-    # files on disk that the key does not describe are copied as they are
+    # files on disk that the key does not describe are copied as they are (no truth units)
     extra = 0
     for p in sorted(src_in.rglob("*")):
         if p.is_file():
@@ -1307,12 +1410,27 @@ def main(argv=None) -> int:
                 (out_in / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(p, out_in / rel)
                 extra += 1
+    if extra:
+        print(f"  WARN {extra} input files are not in truth.json; copied byte-for-byte without truth units",
+              file=sys.stderr)
     new_truth["files"] = new_files
 
+    uhid_counts = Counter()
     if "ids" in variants:
+        # a patient's UHID changes only if that identifier was really rewritten in some
+        # file (matched on the canonical new form, so SNJ/26/1 and SNJ-26-1 count as one)
         for p in new_truth.get("patients", {}).values():
             for hosp, ids in (p.get("uhids") or {}).items():
-                p["uhids"][hosp] = [gen.new_id(x, False) or x for x in ids]
+                new_ids = []
+                for x in ids:
+                    nx = gen.new_id(x, False)
+                    if nx and gen.new_id(x.upper(), False) in gen.ids_replaced:
+                        new_ids.append(nx)
+                        uhid_counts["updated"] += 1
+                    else:
+                        new_ids.append(x)
+                        uhid_counts["kept"] += 1
+                p["uhids"][hosp] = new_ids
     added = [s for s in plan.values() if s.get("loc")]
     new_truth["canaries"] = list(truth.get("canaries") or []) + [s["pid"] for s in added]
     new_truth["chaos"] = True
@@ -1322,7 +1440,8 @@ def main(argv=None) -> int:
 
     st = gen.stats
     meta = {"seed": a.seed, "variants": sorted(variants), "files_total": len(new_files) + extra,
-            "files_changed": changed, "files_renamed": renamed,
+            "files_changed": changed, "files_renamed": renamed, "files_unindexed": extra,
+            "uhids": dict(sorted(uhid_counts.items())),
             "replaced": dict(sorted(st["replaced"].items())), "skipped": dict(sorted(st["skipped"].items())),
             "notes": dict(sorted(st["notes"].items())),
             "names": dict(sorted(gen.names.info.items())) if gen.names else {},
@@ -1333,7 +1452,9 @@ def main(argv=None) -> int:
     print(f"chaos_gen: seed {a.seed}, variants {','.join(v for v in ALL_VARIANTS if v in variants)}")
     print(f"  output: {dest}")
     print(f"  files: {meta['files_total']} total, {changed} changed, {renamed} renamed, "
-          f"{meta['files_total'] - changed} copied byte-for-byte")
+          f"{meta['files_total'] - changed} copied byte-for-byte ({extra} not in truth.json)")
+    if uhid_counts:
+        print(f"  patient uhids: {uhid_counts['updated']} updated, {uhid_counts['kept']} kept (not rewritten in any file)")
     print("  surfaces replaced: " + (", ".join(f"{k} {v}" for k, v in meta["replaced"].items()) or "none"))
     print(f"  surfaces skipped ({sum(meta['skipped'].values())}): "
           + (", ".join(f"{k} {v}" for k, v in meta["skipped"].items()) or "none"))

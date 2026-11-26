@@ -69,8 +69,9 @@ def test_every_input_file_accounted_for(runs):
     kit, res = runs
     out = res["a"][0]
     rep = json.loads((out / "report.json").read_text(encoding="utf-8"))
-    shas = {hashlib.sha256(p.read_bytes()).hexdigest() for p in (kit / "dev" / "input").rglob("*") if p.is_file()}
-    assert {f["input_sha256"] for f in rep["files"]} == shas
+    # multiset: the practice data has two byte-identical files, both must be listed
+    shas = sorted(hashlib.sha256(p.read_bytes()).hexdigest() for p in (kit / "dev" / "input").rglob("*") if p.is_file())
+    assert sorted(f["input_sha256"] for f in rep["files"]) == shas
     for f in rep["files"]:
         if f["status"] == "sanitized":
             assert (out / f["output"]).is_file()
@@ -86,9 +87,33 @@ def test_quarantine_never_copies_raw(runs):
     for f in rep["files"]:
         if f["status"] == "quarantined":
             assert f["output"] is None and f.get("reason")
-    for f in (out / "sanitized").rglob("*"):
+    raw_inputs = [p.read_bytes() for p in (kit / "dev" / "input").rglob("*")
+                  if p.is_file() and hashlib.sha256(p.read_bytes()).hexdigest() in quarantined and p.stat().st_size > 40]
+    for f in out.rglob("*"):
         if f.is_file():
-            assert hashlib.sha256(f.read_bytes()).hexdigest() not in quarantined
+            data = f.read_bytes()
+            assert hashlib.sha256(data).hexdigest() not in quarantined
+            # vault blobs are encrypted: no quarantined input appears inside any output file
+            for raw in raw_inputs:
+                assert raw[:40] not in data
+
+
+def _record_text(path: Path, loc: str) -> str:
+    """The text of one exported record: a CSV/TSV row, a JSON element, or the whole file."""
+    import csv
+    import io
+    text = path.read_text(encoding="utf-8")
+    if loc.startswith("row:"):
+        delim = "\t" if path.suffix.lower() == ".tsv" else ","
+        rows = list(csv.reader(io.StringIO(text, newline=""), delimiter=delim))
+        return delim.join(rows[int(loc[4:]) + 1])
+    if loc.startswith("/"):
+        node = json.loads(text)
+        for part in loc.strip("/").split("/"):
+            part = part.replace("~1", "/").replace("~0", "~")
+            node = node[int(part)] if isinstance(node, list) else node[part]
+        return json.dumps(node, ensure_ascii=False)
+    return text
 
 
 def test_pseudonym_inside_every_linked_record(runs):
@@ -97,4 +122,4 @@ def test_pseudonym_inside_every_linked_record(runs):
     for line in (out / "records.jsonl").read_text(encoding="utf-8").splitlines():
         r = json.loads(line)
         if r["patient"]:
-            assert r["patient"] in (out / r["file"]).read_text(encoding="utf-8")
+            assert r["patient"] in _record_text(out / r["file"], r["loc"]), (r["file"], r["loc"])

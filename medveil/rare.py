@@ -38,9 +38,16 @@ CHAPTERS = [
     ("U00", "U99", "U00-U99", "Codes for special purposes"),
 ]
 PROC_LABEL = "Procedure (generalized)"
-ICD = re.compile(r"(?<![A-Za-z0-9])([A-TV-Z]\d{2}(?:\.\d{1,3})?)(?![A-Za-z0-9])")
-DIAG_WITH_CODE = re.compile(r"([^\n;:()]{3,90}?(?:\([^()\n]{1,30}\)[^\n;:()]{0,60}?)?)\s*\(([A-TV-Z]\d{2}(?:\.\d{1,3})?)\)")
+ICD = re.compile(r"(?<![A-Za-z0-9])([A-Z]\d{2}(?:\.\d{1,3})?)(?![A-Za-z0-9])")
+DIAG_WITH_CODE = re.compile(r"([^\n;:()]{3,90}?(?:\([^()\n]{1,30}\)[^\n;:()]{0,60}?)?)\s*\(([A-Z]\d{2}(?:\.\d{1,3})?)\)")
 PROC_TEXT = re.compile(r"(?i)\bProcedure\s*[:\-]\s*([^\n.;]{4,90}?)(?=\s+(?:done|performed|on\s+day)\b|[.;\n]|$)")
+
+
+_PROC_KEYS = ("procedure", "surgery", "operation", "treatment", "package_name", "intervention")
+
+
+def _is_proc_key(k: str) -> bool:
+    return any(w in k for w in _PROC_KEYS)
 
 
 def chapter(code: str) -> tuple[str, str] | None:
@@ -76,12 +83,12 @@ class RareValues:
         for idx, (_d, rec) in enumerate(recs):
             groups: dict[tuple, dict[str, str]] = defaultdict(dict)
             for sl in rec.slots:
-                if sl.kind != "value" or sl.number or not sl.text:
+                if sl.kind not in ("value", "text") or sl.number or not sl.text:
                     continue
                 k = sl.key.lower()
                 if isinstance(sl.path, tuple) and len(sl.path) > 1 and not isinstance(sl.path[-1], int):
                     groups[sl.path[:-1]][k] = sl.text
-                if "procedure" in k or "surgery" in k:
+                if _is_proc_key(k):
                     c = canon(sl.text)
                     if len(c) >= 4:
                         self.procs.add(c)
@@ -108,11 +115,11 @@ class RareValues:
         variants = sorted(((canon(v), code) for code, vs in self.displays.items() for v in vs if len(canon(v)) >= 6),
                           key=lambda x: -len(x[0]))
         for idx, (_d, rec) in enumerate(recs):
-            body = " ".join(canon(sl.text) for sl in rec.slots if sl.kind == "value" and not sl.number and sl.text)
+            body = " ".join(canon(sl.text) for sl in rec.slots if sl.kind in ("value", "text") and not sl.number and sl.text)
             for v, code in variants:
                 if v and f" {v} " in f" {body} ":
                     self.rec_codes[idx].add(code)
-            for p in self.procs:
+            for p in sorted(self.procs, key=lambda s: (-len(s), s)):
                 if f" {p} " in f" {body} ":
                     self.rec_procs[idx].add(p)
 
@@ -148,7 +155,7 @@ class RareValues:
         changed = False
         proc_row = False
         for sl in rec.slots:
-            if sl.kind != "value" or sl.number or not sl.text:
+            if sl.kind not in ("value", "text") or sl.number or not sl.text:
                 continue
             base = _slot_base(sl)
             new = base
@@ -156,11 +163,11 @@ class RareValues:
                 new = rx.sub(rep, new)
             if procs:
                 k = sl.key.lower()
-                if ("procedure" in k or "surgery" in k) and canon(new) in procs:
+                if _is_proc_key(k) and canon(new) in procs:
                     new = PROC_LABEL
                     proc_row = True
                 else:
-                    for p in procs:
+                    for p in sorted(procs, key=lambda s: (-len(s), s)):
                         new = _replace_canon(new, p, PROC_LABEL)
             if new != base:
                 sl.out = new

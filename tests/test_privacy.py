@@ -74,13 +74,14 @@ def test_rare_diagnosis_is_generalized_common_one_kept():
     rv.plan({i: f"p{i}" for i in range(len(recs))})
     assert rv.apply(0, recs[0][1])
     out = recs[0][1].slots[0].out
-    assert "leishmaniasis" not in out and "B55.0" not in out
-    assert "Typhoid fever (A01.0)" in out and "A00-B99" in out
+    assert out == ("Diagnosis: Certain infectious and parasitic diseases (A00-B99); Typhoid fever (A01.0)")
 
 
 def test_eponym_diagnosis_kept_even_if_rare():
     recs = [(Doc(rel="a", sha256="0"), _rec("Diagnosis: Wilson's disease (E83.0)"))]
     rv = RareValues(2)
     rv.collect(recs)
+    assert "E83.0" in rv.rec_codes[0], "the diagnosis must be collected for this test to mean anything"
     rv.plan({0: "p0"})
+    assert "E83.0" not in rv.rare_codes
     assert not rv.apply(0, recs[0][1])
