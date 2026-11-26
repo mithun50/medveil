@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import re
 from collections import defaultdict
+from functools import lru_cache
 
 from .detect.dates import DateHit, find_dates
 from .detect.engine import ident_tokens, name_tokens
@@ -114,7 +115,12 @@ def ref_date(rec: Record, default: dt.date) -> dt.date:
 
 # --------------------------------------------------------------------------- name logic
 def _ident(toks: tuple) -> list[str]:
-    return ident_tokens(list(toks))
+    return list(_ident_t(tuple(toks)))
+
+
+@lru_cache(maxsize=200_000)
+def _ident_t(toks: tuple) -> tuple:
+    return tuple(ident_tokens(list(toks)))
 
 
 def full_match(a: tuple, b: tuple) -> bool:
@@ -191,13 +197,14 @@ class Cluster:
         self.members += other.members
         self.ids |= other.ids
         self.phones |= other.phones
-        self.names += other.names
-        self.mentions += other.mentions
-        self.relatives += other.relatives
+        # keep unique names only: comparisons are pairwise, duplicates make merges quadratic
+        self.names = list(dict.fromkeys(self.names + other.names))
+        self.mentions = list(dict.fromkeys(self.mentions + other.mentions))
+        self.relatives = list(dict.fromkeys(self.relatives + other.relatives))
         self.dobs |= other.dobs
         self.genders |= other.genders
         self.villages |= other.villages
-        self.byears += other.byears
+        self.byears = list(dict.fromkeys(self.byears + other.byears))
         self.districts |= other.districts
         self.last4 |= other.last4
 

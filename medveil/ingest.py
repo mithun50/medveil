@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import re
+from functools import lru_cache
 
 from .model import Doc, Quarantine, Record, Slot
 from .textnorm import b64_text, normalize
@@ -61,12 +62,14 @@ def decode(raw: bytes) -> tuple[str, str]:
     return text, "cp1252"
 
 
+_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
+
+
 def _control_ratio(text: str) -> float:
     sample = text[:20000]
     if not sample:
         return 0.0
-    bad = sum(1 for c in sample if (ord(c) < 32 and c not in "\r\n\t") or 0x7F <= ord(c) < 0xA0)
-    return bad / len(sample)
+    return len(_CTRL.findall(sample)) / len(sample)
 
 
 def json_depth(text: str, limit: int) -> int:
@@ -242,6 +245,11 @@ def _pointer(path: tuple) -> str:
     return "/" + "/".join(str(p).replace("~", "~0").replace("/", "~1") for p in path)
 
 
+@lru_cache(maxsize=65536)
+def _norm_key(k: str) -> str:
+    return normalize(k)
+
+
 def _get(obj, path):
     for p in path:
         obj = obj[p]
@@ -303,7 +311,7 @@ def _walk(obj, path, owner, classify_key, ctx, doc):
             items = list(node.items())
             for k, v in reversed(items):
                 kp = p + (k,)
-                ks = normalize(str(k))
+                ks = _norm_key(str(k))
                 # JSON keys can hold PII themselves (a dict keyed by name or UHID).
                 owner(kp).slots.append(Slot(path=kp, text=ks, kind="key", key=str(k), orig=k))
                 if ext_name and str(k).startswith("value") and isinstance(v, str):

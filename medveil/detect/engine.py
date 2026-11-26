@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from functools import lru_cache
 
 from ..lexicon import GENERIC_NAME_TOKENS, HONORIFIC_PRE, NAME_PREFIX, SAFE_KEYS, district_of, is_given, is_stopword
 from ..model import Doc, Slot, Span
@@ -22,6 +23,7 @@ from .patterns import (
 
 WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*|[\u0900-\u0963\u0966-\u097F]+")
 _DEVA = re.compile(r"[\u0900-\u097F]")
+_PLAIN_KEY = re.compile(r"[a-z_][a-z0-9_]*(?:[A-Z][a-z0-9_]*)*")
 _HAS_UP = re.compile(r"[A-Z]")
 _HAS_DG = re.compile(r"\d")
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
@@ -49,8 +51,15 @@ def name_tokens(text: str) -> list[str]:
 
 
 def ident_tokens(toks: list[str]) -> list[str]:
-    generic = {key(g) for g in GENERIC_NAME_TOKENS}
-    return [t for t in toks if t not in generic and len(t) >= 2]
+    return list(_ident_cached(tuple(toks)))
+
+
+_GENERIC_KEYS = frozenset(key(g) for g in GENERIC_NAME_TOKENS)
+
+
+@lru_cache(maxsize=200_000)
+def _ident_cached(toks: tuple) -> tuple:
+    return tuple(t for t in toks if t not in _GENERIC_KEYS and len(t) >= 2)
 
 
 class Shapes:
@@ -284,6 +293,11 @@ def resolve(spans: list[Span]) -> list[Span]:
 def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> None:
     text = sl.text
     if not text or not text.strip() or text.lower() in ("null", "none"):
+        return
+    # Plain programmatic JSON keys ("resourceType", "visit_date") cannot hold personal data,
+    # unless one of their parts is a known given name ("zainab_siddiqui").
+    if sl.kind == "key" and _PLAIN_KEY.fullmatch(text) and not any(
+            is_given(p) for p in text.split("_") if len(p) >= 3 and not is_stopword(p)):
         return
     ft = sl.ftype
     spans: list[Span] = []
