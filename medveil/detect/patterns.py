@@ -202,7 +202,7 @@ def find_ids(text: str, shapes=None) -> list[Span]:
             continue
         d = digits(m.group(0))
         # "919334843599" right after a phone cue is a +91 mobile, not an Aadhaar
-        if d.startswith("91") and d[2] in "6789" and re.search(r"(?i)(?:mob|phone|ph|contact|call|tel|मोबाइल|फ़ोन)\W{0,12}$",
+        if d.startswith("91") and d[2] in "6789" and re.search(r"(?i)(?:mob(?:ile)?|phone|ph|contact|call|tel|cell|whatsapp|मोबाइल|फ़ोन)(?:\s*(?:no|number|#))?\.?\W{0,12}$",
                                                               text[max(0, m.start() - 20):m.start()]):
             continue
         add(m.start(), m.end(), "AADHAAR", d, "aadhaar")

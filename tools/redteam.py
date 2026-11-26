@@ -19,6 +19,12 @@ Each relative component risk is "ours / raw", so the number means "how much of
 the attack surface you removed". The overall risk is the published weighted mean
 and the estimated privacy sub-score is 25 * (1 - risk).
 
+Only published files are attacked: a file that report.json declares without an
+output path (quarantined or suppressed) is skipped for A1-A7, because the attacker
+never sees it. A truth unit whose locator is not in records.jsonl takes the
+pseudonym of its nearest JSON-pointer ancestor, else the file's "doc" record (the
+same rule as check_dev.py).
+
 Usage (PowerShell 7 on Windows; set UTF-8 first)
 ------------------------------------------------
   $env:PYTHONIOENCODING = "utf-8"
@@ -30,12 +36,14 @@ Usage (PowerShell 7 on Windows; set UTF-8 first)
 
 Flags
 -----
-  --output   the sanitised release folder to attack (required)
+  --output   the sanitised release folder to attack (required unless --raw)
   --other    a second release built with a different RAKSHA_SECRET, enables A7
   --kit      path to the toolkit (default ..\Secret-Wards-ToolKit)
   --json     write the full numeric result to this JSON file
   --raw      report the raw-input attack as "ours" (ratios become 1.0); use it
-             to confirm the raw baseline matches dev/truth/raw_attack.json
+             to confirm the raw baseline matches dev/truth/raw_attack.json.
+             --output is not read: A6 is skipped (the raw input has no
+             pseudonyms) and A7 is skipped (it needs two releases)
 
 Dev-only. Do not ship. Plain ASCII only, hyphen '-' never a dash.
 """
@@ -116,18 +124,35 @@ MONTHS.update({m[:3]: i for m, i in list(MONTHS.items())})
 # \u0935\u0930\u094d\u0937 = "varsh" (years), \u0938\u093e\u0932 = "saal" (years),
 # \u0909\u092e\u094d\u0930 = "umar", \u0906\u092f\u0941 = "aayu".
 _AGE_LABELS = r"age|age[ _]?sex|umar|\u0909\u092e\u094d\u0930|\u0906\u092f\u0941|janm"
+# A label must start a word, so "Stage 2-3", "Dosage 1-0-1", "Average 40" and "Kumar 45"
+# are not ages. This is a leading \b that still treats "_" as a separator, so JSON keys
+# such as "patient_age" keep matching: not preceded by a letter (digits and "_" allowed).
+_LABEL_START = r"(?<![^\W\d_])"
 _YR = r"yrs?|years?|\u0935\u0930\u094d\u0937|\u0938\u093e\u0932"
-RE_BAND_LABEL = re.compile(r"(?:" + _AGE_LABELS + r")[\"'\s:\-]{0,8}?(\d{1,3})\s*[-\u2013]\s*(\d{1,3})", re.I)
+RE_BAND_LABEL = re.compile(
+    _LABEL_START + r"(?:" + _AGE_LABELS + r")[\"'\s:\-]{0,8}?(\d{1,3})\s*[-\u2013]\s*(\d{1,3})", re.I)
 RE_BAND_UNIT = re.compile(r"(?<![\d.])(\d{1,3})\s*[-\u2013]\s*(\d{1,3})\s*(?:" + _YR + r"|/\s*[mf])", re.I)
 RE_BRACKET = re.compile(r"\[\s*(\d{1,3})\s*,\s*(\d{1,3})\s*[\)\]]")
 RE_PLUS = re.compile(r"(?<![\d.])(\d{1,3})\+")
 RE_AGE_SEX = re.compile(r"(?<![\d.])(\d{1,3})\s*/\s*[MFmf]\b")
 RE_AGE_UNIT_SEX = re.compile(r"(?<![\d.])(\d{1,3})\s*(?:" + _YR + r")\s*/\s*[MFmf]", re.I)
 RE_AGE_HINDI = re.compile(r"(?<![\d.])(\d{1,3})\s*(?:\u0935\u0930\u094d\u0937|\u0938\u093e\u0932)")
-RE_AGE_LABEL = re.compile(r"(?:" + _AGE_LABELS + r")[\"'\s:\-]{0,4}?(\d{1,3})(?!\s*[-\u2013+/\d])", re.I)
+RE_AGE_LABEL = re.compile(
+    _LABEL_START + r"(?:" + _AGE_LABELS + r")[\"'\s:\-]{0,4}?(\d{1,3})(?!\s*[-\u2013+/\d])", re.I)
 RE_AGE_YRS = re.compile(r"(?<![\d.])(\d{1,3})\s*(?:" + _YR + r")\b", re.I)  # guarded against "x 9 yrs"
 
-RE_PHONE = re.compile(r"(?<!\d)(?:\+?91[\-\s]?)?([6-9]\d[\-\s]?\d{4}[\-\s]?\d{4}|[6-9]\d{9})(?!\d)")
+# Indian mobile numbers in the usual spellings: an optional (+91) / +91 / 0091 / 91 / 0
+# prefix, then ten digits starting 6-9 with at most one space, dash or dot between any two
+# digits ("98765 43210", "9876-543-210", "+91.98765.43210", "(+91) 98765-43210",
+# "0091 9876 543 210", "098765 43210"). Group 1 is the ten-digit number. The lookarounds
+# keep it out of longer digit runs, including runs that continue after one separator
+# (a 12-digit Aadhaar "9876 5432 1098" is not a phone).
+_PSEP = r"[ .\-]"
+RE_PHONE = re.compile(
+    r"(?<!\d)(?<!\d" + _PSEP + r")"
+    r"(?:(?:\(\+91\)|\+91|0091|91)" + _PSEP + r"?|0)?"
+    r"([6-9](?:" + _PSEP + r"?\d){9})"
+    r"(?!" + _PSEP + r"?\d)")
 RE_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 RE_AADHAAR_MASK = re.compile(r"(?:[xX*\u00d7]{2,}[\s\-]*){2,}(\d{4})(?!\d)")
 RE_AADHAAR_FULL = re.compile(r"(?<!\d)(\d{4}[\s\-]?\d{4}[\s\-]?\d{4})(?!\d)")
@@ -274,9 +299,7 @@ def extract_evidence(text: str, name_vocab, ref_year: int):
     }
 
     for m in RE_PHONE.finditer(text):
-        d = digits_only(m.group(0))
-        if len(d) >= 11 and d.startswith("91"):
-            d = d[-10:]
+        d = digits_only(m.group(1))
         if len(d) == 10 and d[0] in "6789":
             ev["phones"].add(d)
     for m in RE_EMAIL.finditer(text):
@@ -578,33 +601,69 @@ def record_text(parsed_cache, raw_text, fmt, loc, delim):
     return raw_text  # doc
 
 
+def load_release_index(output_dir: Path):
+    """report.json and records.jsonl of a release.
+
+    Returns (renamed, unpublished, claimed):
+      renamed     input sha256 -> declared output path (last entry wins, like check_dev)
+      unpublished input sha256 values whose every report entry has no output path
+                  (quarantined or suppressed: not part of the release)
+      claimed     output rel path -> {loc: pseudonym} from records.jsonl
+    """
+    try:
+        report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        report = {"files": []}
+    entries = [e for e in report.get("files") or [] if isinstance(e, dict)]
+    renamed = {e.get("input_sha256"): e.get("output") for e in entries}
+    outputs = defaultdict(list)
+    for e in entries:
+        outputs[e.get("input_sha256")].append(e.get("output"))
+    unpublished = {sha for sha, outs in outputs.items() if not any(outs)}
+    claimed = defaultdict(dict)
+    try:
+        for line in (output_dir / "records.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                o = json.loads(line)
+                rel = str(o["file"]).replace("sanitized/", "", 1)
+                claimed[rel][o["loc"]] = o.get("patient")
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return renamed, unpublished, claimed
+
+
+def claimed_pseudonym(recs: dict, loc: str):
+    """The record covering a truth unit: exact loc, nearest JSON-pointer ancestor, or doc.
+
+    Same rule as check_dev.record_for, so a nested unit such as /visits/3/x resolves to the
+    pseudonym the release reported for /visits/3 (or for the whole document)."""
+    if loc in recs:
+        return recs[loc]
+    if loc.startswith("/"):
+        parts = loc.split("/")
+        for i in range(len(parts) - 1, 1, -1):
+            anc = "/".join(parts[:i])
+            if anc in recs:
+                return recs[anc]
+    return recs.get("doc")
+
+
 def build_records(units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
                   *, source, input_dir=None, output_dir=None):
     """Build the attack record list from the truth units.
 
     source='raw'      -> read dev/input directly (original names, no pseudonyms)
-    source='release'  -> read the sanitised output via report.json sha mapping
+    source='release'  -> read the sanitised output via report.json sha mapping; files the
+                         report declares without an output (quarantined) are skipped,
+                         because they are not published
     """
     records = []
     psn_by_pt = {}
     file_text_cache = {}
 
-    renamed = {}
-    rec_psn = {}
+    renamed, unpublished, claimed = {}, set(), {}
     if source == "release":
-        try:
-            report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            report = {"files": []}
-        renamed = {e.get("input_sha256"): e.get("output") for e in report.get("files") or []}
-        try:
-            for line in (output_dir / "records.jsonl").read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    o = json.loads(line)
-                    rel = str(o["file"]).replace("sanitized/", "", 1)
-                    rec_psn[(rel, o["loc"])] = o.get("patient")
-        except (OSError, ValueError, KeyError):
-            pass
+        renamed, unpublished, claimed = load_release_index(output_dir)
 
     for rel, f in truth["files"].items():
         fmt = f["format"]
@@ -618,6 +677,8 @@ def build_records(units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
             except OSError:
                 text = ""
         else:
+            if f["sha256"] in unpublished:
+                continue
             declared = renamed.get(f["sha256"])
             out_rel = str(declared).replace("sanitized/", "", 1) if declared else rel
             path = output_dir / "sanitized" / out_rel
@@ -628,6 +689,7 @@ def build_records(units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
         if path not in file_text_cache:
             file_text_cache[path] = text
         parsed_cache = {}
+        file_claims = claimed.get(out_rel, {})
 
         for loc, u in f["units"].items():
             if loc.startswith("@") or not u.get("patient"):
@@ -647,11 +709,11 @@ def build_records(units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
             refs = set(RE_REF.findall(rec.text))
             psns = set(RE_PSN.findall(rec.text))
             if source == "release":
-                claimed = rec_psn.get((out_rel, loc))
-                if claimed:
-                    psns.add(claimed)
-                    rec.psn = claimed
-                    psn_by_pt.setdefault(pt, claimed)
+                claimed_psn = claimed_pseudonym(file_claims, loc)
+                if claimed_psn:
+                    psns.add(claimed_psn)
+                    rec.psn = claimed_psn
+                    psn_by_pt.setdefault(pt, claimed_psn)
                 rec.join_keys = refs | psns
             else:
                 rec.join_keys = refs
@@ -901,11 +963,15 @@ REGISTRY_BY_RID = [{}]  # filled at startup
 DIGIT_TYPES = {"PHONE", "AADHAAR", "ABHA_NUMBER", "MRN"}
 
 
-def run_direct_exposure(truth, file_text_cache, renamed_map, output_dir, patient_rid):
-    """A1: share of patients with a surviving critical entity in the release."""
+def run_direct_exposure(truth, file_text_cache, renamed_map, output_dir, patient_rid, unpublished=frozenset()):
+    """A1: share of patients with a surviving critical entity in the release.
+
+    Files declared without an output (quarantined) are not published and are skipped."""
     # map truth rel -> output file text
     rel_text = {}
     for rel, f in truth["files"].items():
+        if f["sha256"] in unpublished:
+            continue
         declared = renamed_map.get(f["sha256"])
         out_rel = str(declared).replace("sanitized/", "", 1) if declared else rel
         path = output_dir / "sanitized" / out_rel
@@ -914,6 +980,8 @@ def run_direct_exposure(truth, file_text_cache, renamed_map, output_dir, patient
     exposed = set()
     all_pts = set()
     for rel, f in truth["files"].items():
+        if rel not in rel_text:
+            continue
         text, out_rel = rel_text[rel]
         ntext = norm(text)
         dtext = digits_only(text)
@@ -1064,13 +1132,15 @@ def fmt_pct(x):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Dev-only red-team attacker (A1-A7).")
-    ap.add_argument("--output", required=True, help="sanitised release folder to attack")
+    ap.add_argument("--output", help="sanitised release folder to attack (required unless --raw)")
     ap.add_argument("--other", help="second release (different secret) to enable A7")
     ap.add_argument("--kit", default=r"..\Secret-Wards-ToolKit", help="toolkit path")
     ap.add_argument("--json", dest="json_out", help="write full result to this file")
     ap.add_argument("--raw", action="store_true",
-                    help="report the raw-input attack as 'ours' (sanity check)")
+                    help="report the raw-input attack as 'ours' (sanity check; A6 and A7 are skipped)")
     args = ap.parse_args()
+    if not args.raw and not args.output:
+        ap.error("--output is required unless --raw is given")
 
     kit = Path(args.kit)
     truth = json.loads((kit / "dev" / "truth" / "truth.json").read_text(encoding="utf-8"))
@@ -1100,43 +1170,42 @@ def main() -> int:
     raw["direct_exposure"] = 1.0  # raw exposes every patient by definition
 
     # Release under attack (or raw-as-submission with --raw)
-    out_dir = Path(args.output)
-    rel_records, psn_by_pt, rel_cache = build_records(
-        units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
-        source="release", output_dir=out_dir)
-    renamed_map = {}
-    try:
-        report = json.loads((out_dir / "report.json").read_text(encoding="utf-8"))
-        renamed_map = {e.get("input_sha256"): e.get("output") for e in report.get("files") or []}
-    except (OSError, ValueError):
-        pass
-
+    a7 = None
     if args.raw:
+        # --output is not read: the raw input has no pseudonyms, so A6 is skipped instead of
+        # inverting the pseudonyms of some unrelated release, and A7 needs two releases.
         ours = attack_source("RAW(as submission)", raw_records, rows, known, rid_set, ref_year)
         ours["direct_exposure"] = 1.0
+        ours["pseudonym_inversion"] = None
+        ours["pseudonyms"] = n_psn = 0
         ours_records = raw_records
     else:
+        out_dir = Path(args.output)
+        rel_records, psn_by_pt, rel_cache = build_records(
+            units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
+            source="release", output_dir=out_dir)
+        renamed_map, unpublished, _ = load_release_index(out_dir)
         ours = attack_source("OURS", rel_records, rows, known, rid_set, ref_year)
         ours["direct_exposure"] = run_direct_exposure(
-            truth, rel_cache, renamed_map, out_dir, patient_rid)
+            truth, rel_cache, renamed_map, out_dir, patient_rid, unpublished)
+        ours["unpublished_files"] = sum(1 for f in truth["files"].values() if f["sha256"] in unpublished)
         ours_records = rel_records
 
-    # A6 pseudonym inversion (release only)
-    inv_rate, n_psn = run_pseudonym_inversion(
-        rel_records, truth, patient_rid, psn_by_pt, name_vocab, REGISTRY_BY_RID[0])
-    ours["pseudonym_inversion"] = inv_rate
-    ours["pseudonyms"] = n_psn
+        # A6 pseudonym inversion (release only)
+        inv_rate, n_psn = run_pseudonym_inversion(
+            rel_records, truth, patient_rid, psn_by_pt, name_vocab, REGISTRY_BY_RID[0])
+        ours["pseudonym_inversion"] = inv_rate
+        ours["pseudonyms"] = n_psn
 
-    # A7 cross-release
-    a7 = None
-    if args.other and not args.raw:
-        other_records, psn_by_pt_b, _ = build_records(
-            units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
-            source="release", output_dir=Path(args.other))
-        a7_risk, a7_psn, a7_date = run_cross_release(
-            truth, psn_by_pt, psn_by_pt_b, rel_records, other_records, ref_year)
-        a7 = {"risk": a7_risk, "stable_pseudonyms": a7_psn, "stable_dates": a7_date}
-        ours["cross_release"] = a7
+        # A7 cross-release
+        if args.other:
+            other_records, psn_by_pt_b, _ = build_records(
+                units, truth, name_vocab, ref_year, rid_to_idx, patient_rid,
+                source="release", output_dir=Path(args.other))
+            a7_risk, a7_psn, a7_date = run_cross_release(
+                truth, psn_by_pt, psn_by_pt_b, rel_records, other_records, ref_year)
+            a7 = {"risk": a7_risk, "stable_pseudonyms": a7_psn, "stable_dates": a7_date}
+            ours["cross_release"] = a7
 
     # ---- assemble components: name, raw risk, our risk, ratio, weight ----
     def ratio(o, r):
@@ -1151,8 +1220,9 @@ def main() -> int:
                   ratio(ours["patients_reidentified"], raw["patients_reidentified"]), 0.20, "ratio"))
     comps.append(("A5 targeted attack", raw["targeted_success"], ours["targeted_success"],
                   ratio(ours["targeted_success"], raw["targeted_success"]), 0.20, "ratio"))
-    comps.append(("A6 pseudonym inversion", 0.0, ours["pseudonym_inversion"],
-                  ours["pseudonym_inversion"], 0.10, "absolute"))
+    if ours["pseudonym_inversion"] is not None:
+        comps.append(("A6 pseudonym inversion", 0.0, ours["pseudonym_inversion"],
+                      ours["pseudonym_inversion"], 0.10, "absolute"))
     if a7 is not None:
         comps.append(("A7 cross-release", 0.0, a7["risk"], a7["risk"], 0.10, "absolute"))
 
@@ -1183,6 +1253,11 @@ def main() -> int:
     if a7 is not None:
         print(f"A7 stable pseudonyms={fmt_pct(a7['stable_pseudonyms'])}  "
               f"stable dates={fmt_pct(a7['stable_dates'])}")
+    if args.raw:
+        print("A6 pseudonym inversion        : skipped with --raw (the raw input has no pseudonyms)")
+    elif ours.get("unpublished_files"):
+        print(f"unpublished files skipped     : {ours['unpublished_files']} "
+              "(declared in report.json without an output, e.g. quarantined)")
 
     # ---- top 10 most exposed records (no registry personal data; rid only) ----
     ranked = sorted(ours_records, key=lambda r: r.prof_risk, reverse=True)[:10]

@@ -206,7 +206,7 @@ _LABELS = [
     (re.compile(r"(?i)\b(?:called\s+by|witnessed\s+by|raised\s+by|signed\s+by|brought\s+by|accompanied\s+by|"
                 r"informed\s+by|visited\s+by|submitted\s+by|reported\s+by|consent\s+(?:given|signed)\s+by|"
                 r"received\s+by|collected\s+by|handed\s+over\s+to)\s*[:\-=]?\s*"), "other"),
-    (re.compile(r"(?:मरीज़?\s*का\s*नाम|रोगी\s*का\s*नाम|(?<!का\s)नाम|मरीज़?|रोगी|मरीज़ा)\s*[:：\-]\s*"), "patient"),
+    (re.compile(r"(?:मरीज़?\s*का\s*नाम|रोगी\s*का\s*नाम|नाम|मरीज़?|रोगी|मरीज़ा)\s*[:：\-]\s*"), "patient"),
     (re.compile(r"(?:पिता\s*का\s*नाम|पति\s*का\s*नाम|माता\s*का\s*नाम|पत्नी\s*का\s*नाम|अभिभावक|परिचारक|"
                 r"पिता/पति\s*का\s*नाम)\s*[:：\-]\s*"), "relative"),
 ]

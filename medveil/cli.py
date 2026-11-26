@@ -239,7 +239,7 @@ def main(argv: list[str] | None = None) -> int:
                 rel.update(ident_tokens(list(n)))
             rec_canon[i] = canon
         profiles[canon] = {"ages": ages, "gender": genders.most_common(1)[0][0] if len(genders) == 1 else None,
-                           "district": districts.most_common(1)[0][0] if districts else None}
+                           "district": sorted(districts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0] if districts else None}
         cluster_names[canon] = (sorted(pat), sorted(rel - pat))
     for i, (d, r) in enumerate(recs):
         if i not in rec_canon:

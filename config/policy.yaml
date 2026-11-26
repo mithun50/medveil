@@ -1,5 +1,5 @@
-# MedVeil privacy policy. Every value here was chosen with the red-team harness
-# (tools/redteam.py) on the practice registry; see docs/PRIVACY.md for the numbers.
+# MedVeil privacy policy. Values were chosen with the red-team harness on the practice
+# registry (python tools/sweep.py); the measured trade-off is in README.md.
 
 pseudonym:
   length: 8                # PSN- plus 8 letters from HMAC-SHA256(K_psn, canonical cluster key)

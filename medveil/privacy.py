@@ -80,22 +80,26 @@ def plan_bands(profiles: dict[str, dict], policy: dict) -> tuple[dict, dict]:
                 break
         out[c] = b
     final = Counter((p.get("gender"), out[c], p.get("district")) for c, p in profiles.items() if out[c])
-    by_div = Counter((p.get("gender"), out[c], division_of.get(p.get("district"), p.get("district")))
-                     for c, p in profiles.items() if out[c])
     keep = policy.get("location", {}).get("keep_level", "district")
     fallback = policy.get("location", {}).get("fallback_level", "state")
     level = {}
+    raised = []
     for c, p in profiles.items():
         level[c] = "district"
         if keep in ("division", "state") and p.get("district"):
             level[c] = keep
             continue
         if out[c] and p.get("district") and final[(p.get("gender"), out[c], p.get("district"))] < k_loc:
-            div = division_of.get(p.get("district"))
-            if fallback == "division" and div and by_div[(p.get("gender"), out[c], div)] >= k_loc:
+            level[c] = "state"
+            raised.append(c)
+    if fallback == "division":
+        # Only profiles that will actually publish a division count towards its k.
+        by_div = Counter((profiles[c].get("gender"), out[c], division_of.get(profiles[c].get("district")))
+                         for c in raised)
+        for c in raised:
+            div = division_of.get(profiles[c].get("district"))
+            if div and by_div[(profiles[c].get("gender"), out[c], div)] >= k_loc:
                 level[c] = "division"
-            else:
-                level[c] = "state"
     return out, level
 
 
@@ -111,30 +115,30 @@ def shift_date(d: dt.date, days: int) -> dt.date:
         return d
 
 
-_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?)\s+|(?:जिला|ज़िला)\s+)([A-Za-z][A-Za-z ]{2,30}?|[\u0900-\u097F]+)(?=\s*(?:[-,;\n]|$|\s{2}))")
+_DIST_CTX = re.compile(r"(?i)(\b(?:Distt\.?|District|Dist\.?)\s+|(?:जिला|ज़िला)\s+)"
+                       r"([A-Za-z][A-Za-z ]{2,30}?|[\u0900-\u097F]+(?:\s+[\u0900-\u097F]+)*?)(?=\s*(?:[-,;\n]|$|\s{2}))")
 
 
 def raise_location(rec, level: str, division_of: dict) -> bool:
     """Replace this record's district with its division (or the state) where it appears
     as a location: district fields, village/tehsil fields we already raised, and
-    "Distt. X" / "जिला X" in text. Hospital names are left alone."""
+    "Distt. X" / "जिला X" in text. Hospital names are left alone. A district we cannot
+    resolve is replaced by a generic region label rather than kept."""
     from .lexicon import district_of
     changed = False
     for sl in rec.slots:
-        if sl.kind != "value" or sl.number or not sl.text:
+        if sl.kind not in ("value", "text") or sl.number or not sl.text:
             continue
         base = sl.out if isinstance(sl.out, str) else sl.text
         new = base
         if sl.ftype in ("DISTRICT", "VILLAGE", "TEHSIL"):
-            d = district_of(base)
-            if d:
-                new = _label(d, level, division_of)
+            if base.strip() and not base.startswith("["):
+                new = _label(district_of(base), level, division_of)
         elif sl.ftype in (None, "TEXT", "ADDRESS"):
             def sub(m):
-                d = district_of(m.group(2))
-                return m.group(1) + _label(d, level, division_of) if d else m.group(0)
+                return m.group(1) + _label(district_of(m.group(2)), level, division_of)
             new = _DIST_CTX.sub(sub, base)
-        if sl.ftype == "PIN" and re.match(r"\d{3}\*\*\*$", base.strip()):
+        if sl.ftype == "PIN" and re.fullmatch(r"\d+\*+", base.strip()):
             new = "******"
         if new != base:
             sl.out = new
@@ -142,7 +146,9 @@ def raise_location(rec, level: str, division_of: dict) -> bool:
     return changed
 
 
-def _label(d: tuple[str, str], level: str, division_of: dict) -> str:
+def _label(d: tuple[str, str] | None, level: str, division_of: dict) -> str:
+    if d is None:
+        return "[REGION]"
     canon, div = d
     if level == "division" and div:
         return f"{div} Division"

@@ -137,7 +137,8 @@ HINDI_COMMON = frozenset("""
 HEADER_RULES: list[tuple[str, str]] = [
     (r"\b(doctor|dr|consultant|physician|surgeon|ref doctor|referred by|referring|treating|practitioner|author)\b", "DOCTOR"),
     (r"\b(relation|rel type|relationship)\b$", "RELATION"),
-    (r"\b(?!rogi\b|mareez\b|mariz\b|marij\b|patient\b|pt\b)[a-z]+ (?:ka|ki|ke) naam\b", "RELATIVE"),
+    (r"\b(?:pita|pati|mata|patni|beta|beti|bete|bahu|sasur|saas|bhai|behen|bahan|abhibhavak|sanrakshak|parijan|"
+     r"rishtedar|sambandhi|chacha|chachi|mama|mami|dada|dadi|nana|nani|devar|jeth|bhabhi|pita pati) (?:ka|ki|ke) naam\b", "RELATIVE"),
     (r"\b(pita|pati|father|husband|guardian|relative|attendant|nok|kin|spouse|mother|wife|son of|care of|informant|"
      r"contact person|parent|mata|abhibhavak|sanrakshak|parijan|rishtedar|patni|escort|bystander)\b", "RELATIVE"),
     (r"\b(first ?name|given|fname|forename|pratham naam)\b", "FIRST_NAME"),
@@ -150,8 +151,7 @@ HEADER_RULES: list[tuple[str, str]] = [
     (r"\b(e ?mail|email id|mail)\b", "EMAIL"),
     (r"\b(mobile|phone|contact|mob|cell|tel|telephone|callback|whatsapp|ph no|contact no)\b", "PHONE"),
     (r"\b(uhid|mrn|mr no|mrd|patient ?id|patientid|pid|reg no|regn no|registration no|reg number|cr no|crno|ipd ?no|ip ?no|ipd|admission no|adm no|hospital no|patient ref|patient_ref|hosp id|patient no|case no|bht)\b", "MRN"),
-    (r"\b(dob|d o b|date of birth|birth ?date|birthdate|birth|janm|janam|janma|janm tithi|janam tithi|born|"
-     r"date of b)\b", "DOB"),
+    (r"\b(dob|d o b|date of birth|birth ?date|birthdate|janm tithi|janam tithi|janma tithi|janm|janam|born on)\b", "DOB"),
     (r"\b(age ?sex|age ?gender|age ?/ ?sex)\b", "AGE_SEX"),
     (r"\b(age|umar|umra|umr|aayu|aayu varsh)\b", "AGE"),
     (r"\b(gender|sex|ling)\b", "GENDER"),

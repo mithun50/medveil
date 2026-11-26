@@ -72,7 +72,7 @@ def deva_to_latin(word: str) -> str:
     deleted = [False] * n
     # Word-final schwa is dropped, except after a conjunct ending in r/l/y/v
     # (उपेंद्र Upendra, शुक्ला Shukla, चंद्र Chandra keep it; खुर्द Khurd does not).
-    final_after_conjunct = (n > 2 and units[-2][0] is not None and units[-2][1] is None
+    final_after_conjunct = (n > 1 and units[-2][0] is not None and units[-2][1] is None
                             and units[-1][0] in ("r", "l", "y", "v"))
     if n > 1 and units[-1][0] is not None and units[-1][2] and not units[-1][3] and not final_after_conjunct:
         units[-1][1] = None
