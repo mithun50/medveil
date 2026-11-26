@@ -250,6 +250,15 @@ _KINSHIP = {"bhaiya", "bhaiyya", "mama", "mami", "chacha", "chachi", "mausi", "m
 _ADJ_GAP = re.compile(r"^[\s,;:]*(?:\([^)\n]{0,40}\))?[\s,;:]*(?:(?:mob(?:ile)?|ph(?:one)?|contact|tel|cell|no|call)\.?\s*(?:no\.?)?)?[\s.:\-#]*$", re.I)
 
 
+def _is_known_word(b: str) -> bool:
+    """A gazetteer name, or a hyphen/apostrophe compound whose parts of 2+ letters all are
+    ("mary-ann", "ram-prasad")."""
+    if is_name_token(b):
+        return True
+    parts = [x for x in re.split(r"['\-]", b) if len(x) >= 2]
+    return len(parts) > 1 and all(is_name_token(x) for x in parts)
+
+
 def _known_run(T: Toks, r: tuple[int, int] | None) -> tuple[int, int] | None:
     """The leading tokens of run r that are known given names or surnames, or None."""
     if r is None:
@@ -259,7 +268,7 @@ def _known_run(T: Toks, r: tuple[int, int] | None) -> tuple[int, int] | None:
         tk = T.t[k]
         if tk.kind == "ws":
             continue
-        if tk.kind != "lat" or not is_name_token(_bare(tk.text)):
+        if tk.kind != "lat" or not _is_known_word(_bare(tk.text)):
             break
         last = k
     return (r[0], last) if last is not None else None
@@ -305,7 +314,9 @@ def find_names(text: str, prot: list, phone_spans: list[Span]) -> list[Span]:
             bare = re.sub(r"[\s:\-=]+$", "", m.group(0)).strip().lower().rstrip(".")
             sep = re.search(r"[:\-=]\s*$", m.group(0)) is not None
             if bare in ("patient", "pt"):
-                r = T.take_name(j) or _known_run(T, T.take_name(j, any_case=True))
+                # the longer of the capitalised run and the known-name run ("Rohit mehra")
+                cands_r = [x for x in (T.take_name(j), _known_run(T, T.take_name(j, any_case=True))) if x]
+                r = max(cands_r, key=lambda x: x[1]) if cands_r else None
             else:
                 r = T.take_name(j, any_case=sep)
             if r:

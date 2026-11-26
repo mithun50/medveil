@@ -307,3 +307,21 @@ def test_release_with_bad_records_and_report_types_does_not_crash(tmp_path):
     R = sc.Release(out, {"files": {}})
     assert R.records_error == "not UTF-8"
     assert R.entries == []
+
+
+
+def test_performance_ignores_malformed_report_sections():
+    class _A:
+        profile, wall_seconds, peak_mb, exit_code, repeat = "small", None, None, 0, None
+    for rep in ({"timing": [1], "resources": "x"}, {"timing": {"seconds": float("nan")}, "resources": {"peak_rss_mb": 1e999}}):
+        class _Rel:
+            report = rep
+        class _Ctx:
+            cfg, rel, notes = {}, _Rel(), []
+        sc.cat_performance(_Ctx(), _A(), 10.0)     # used to raise AttributeError on these
+        assert any("not measured" in n for n in _Ctx.notes)
+
+
+def test_non_finite_measurement_flags_are_rejected():
+    with pytest.raises(SystemExit):
+        sc.main(["--output", "x", "--wall-seconds", "nan"])

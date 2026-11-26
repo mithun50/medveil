@@ -48,8 +48,13 @@ def _diag_with_code(text: str) -> list[tuple[str, str]]:
     if "(" not in text:
         return out
     for m in _CODE_IN_PARENS.finditer(text):
-        # DIAG_WITH_CODE allows up to 182 characters (plus spaces) before "(CODE)"
-        window = text[max(0, m.start() - 256):m.end()]
+        # DIAG_WITH_CODE allows up to 182 characters before "(CODE)", plus any whitespace.
+        # The whitespace run before the code is collapsed to one space, so a long run cannot
+        # push the display out of the window and the window stays short.
+        k = m.start()
+        while k > 0 and text[k - 1] in " \t\r\n":
+            k -= 1
+        window = text[max(0, k - 256):k] + " " + m.group(0)
         dm = None
         for dm in DIAG_WITH_CODE.finditer(window):
             pass

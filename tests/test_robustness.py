@@ -195,3 +195,66 @@ def test_regular_file_read_and_size_limit(tmp_path):
     assert _read_regular(f, 1 << 20)[:2] == (b"hello world", "")
     raw, reason, h = _read_regular(f, 4)
     assert (raw, reason) == (b"", "too_large") and h.hexdigest() == hashlib.sha256(b"hello world").hexdigest()
+
+
+# ---------------------------------------------------------------- review findings, PR #3 round 2
+
+def test_label_at_the_end_of_a_chunk_keeps_its_name():
+    # the chunk cut falls right after "Name: ", so the name is the start of the next chunk
+    text = "x " * 2045 + "Name: anne-marie o'brien\n" + "x " * 15000
+    assert text[:4096].endswith("Name: ")
+    assert ("NAME", "anne-marie o'brien") in found(text, "NAME")
+
+
+def test_doctor_title_at_the_end_of_a_chunk_still_protects_the_name():
+    k = Knowledge()
+    k.add_name("Rohit Mehra", "patient")     # the same name is also a known patient
+    k.finalize()
+    text = "x " * 2046 + "Dr. Rohit Mehra reviewed\n" + "x " * 15000
+    assert text[:4096].endswith("Dr. ")
+    sl = Slot(path=(), text=normalize(text), ftype="TEXT", kind="value")
+    detect_slot(sl, k, Doc(rel="x.txt", sha256="0"))
+    assert not [s for s in sl.spans if s.etype == "NAME"]
+
+
+@pytest.mark.parametrize("text", ["relative: anne-marie o'brien", "beneficiary: rohit mehra",
+                                  "contact person: rohit mehra"])
+def test_lowercase_text_with_any_label_reaches_name_detection(text):
+    assert found(text, "NAME")
+
+
+def test_capitalised_given_name_with_lowercase_surname_after_patient():
+    assert ("NAME", "Rohit mehra") in found("Patient: Rohit mehra, 45 yrs", "NAME")
+
+
+def test_hyphenated_known_name_after_bare_patient_label():
+    assert found("Patient: ram-prasad yadav", "NAME")
+
+
+@pytest.mark.parametrize("payload", [
+    "+91 98765 43210".encode().hex(), "98765-43210".encode().hex()])
+def test_hex_of_a_formatted_phone_is_removed(payload):
+    assert found("ref " + payload, "ENCODED")
+
+
+
+def test_reading_small_files_under_a_large_limit_is_cheap(tmp_path):
+    # Regression: read(limit + 1) made Python allocate a buffer of the whole limit (200 MB in
+    # the shipped policy) for every input file, turning a 3 s run into 30 s.
+    from medveil.cli import _read_regular
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x" * 1000)
+    st = os.lstat(f)
+    t0 = time.perf_counter()
+    for _ in range(50):
+        raw, reason, _ = _read_regular(f, 1024 * 1024 * 1024, st)
+    assert (len(raw), reason) == (1000, "")
+    assert time.perf_counter() - t0 < 1.0
+
+
+def test_a_different_file_at_the_path_is_refused(tmp_path):
+    from medveil.cli import _read_regular
+    a, b = tmp_path / "a.txt", tmp_path / "b.txt"
+    a.write_bytes(b"one")
+    b.write_bytes(b"two")
+    assert _read_regular(a, 1 << 20, os.lstat(b))[:2] == (b"", "unreadable")

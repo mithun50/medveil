@@ -85,11 +85,12 @@ def replacement(sp: Span, sl: Slot, ctx: Ctx, structured: bool) -> str:
     if structured:
         if t == "DOB":
             if ctx.dob_mode == "shift":
-                # Only the shifted dates are written: anything else in a DOB field (a name,
-                # a phone typed into the wrong column) is dropped, as in suppress mode.
+                # Only the first date is written, shifted: anything else in a DOB field (a
+                # name, a phone typed into the wrong column, a second date) is dropped, as in
+                # suppress mode, and the value stays one valid date (a FHIR birthDate).
                 hits = find_dates(sl.text[sp.start:sp.end], ctx.date_order)
                 if hits:
-                    return ", ".join(render(h, shift_date(h.date, ctx.shift)) for h in hits)
+                    return render(hits[0], shift_date(hits[0].date, ctx.shift))
             return ""
         if t in ("VILLAGE", "TEHSIL"):
             return ctx.district or PLACEHOLDER[t]

@@ -126,21 +126,40 @@ def _clean_path(s: str) -> Path:
 _OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
-def _read_regular(p: Path, max_bytes: float):
-    """(raw, reason, sha256 object) for a path that lstat saw as a regular file. The file is
-    opened without following links and re-checked on the open handle, so a swap to a link
-    or a FIFO after the lstat is caught instead of followed or blocked on."""
+def _read_regular(p: Path, max_bytes: float, st: os.stat_result | None = None):
+    """(raw, reason, sha256 object) for a path that lstat saw as a regular file.
+
+    The file is opened without following links where the platform can (O_NOFOLLOW), and the
+    open handle is checked again: it must be a regular file and, when the lstat result `st`
+    is given, the same file (device and inode). That also covers platforms without
+    O_NOFOLLOW: a swap to a link or another file after the lstat is refused, not followed.
+    At most max_bytes + 1 bytes are read, so a file that grows meanwhile cannot exceed the
+    memory bound; it is hashed in chunks and quarantined as too large."""
     fd = os.open(p, _OPEN_FLAGS)
     with os.fdopen(fd, "rb") as fh:
         fst = os.fstat(fh.fileno())
         if not _stat.S_ISREG(fst.st_mode):
             return b"", "special_file", None
-        if fst.st_size > max_bytes:
-            h = hashlib.sha256()
+        if st is not None and (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
+            return b"", "unreadable", None
+        limit = int(max_bytes)
+        buf = bytearray()
+        if fst.st_size <= limit:
+            # Ask for the size fstat reported plus one byte (asking for `limit` would make
+            # Python allocate a buffer that large for every file); keep reading in 1 MB
+            # pieces only if the file grew, and stop just past the limit.
+            buf += fh.read(fst.st_size + 1)
+            while len(buf) > fst.st_size and len(buf) <= limit:
+                piece = fh.read(min(1 << 20, limit + 1 - len(buf)))
+                if not piece:
+                    break
+                buf += piece
+        if fst.st_size > limit or len(buf) > limit:
+            h = hashlib.sha256(buf)
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
             return b"", "too_large", h
-        return fh.read(), "", None
+        return bytes(buf), "", None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -201,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
             elif not _stat.S_ISREG(st.st_mode):
                 reason = "special_file"
             else:
-                raw, reason, h = _read_regular(p, max_bytes)
+                raw, reason, h = _read_regular(p, max_bytes, st)
         except OSError:
             reason = "unreadable"
         doc = Doc(rel=rel, sha256=(h.hexdigest() if reason == "too_large" else hashlib.sha256(raw).hexdigest()))

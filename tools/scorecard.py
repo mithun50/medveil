@@ -175,6 +175,17 @@ def _as_dict(x) -> dict:
     return x if isinstance(x, dict) else {}
 
 
+def _finite_number(x) -> bool:
+    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
+
+def _finite_arg(s: str) -> float:
+    v = float(s)
+    if not math.isfinite(v):
+        raise argparse.ArgumentTypeError("must be a finite number, got %r" % s)
+    return v
+
+
 def _reject_json_constant(name: str):
     raise ValueError("JSON has no %s" % name)
 
@@ -2435,8 +2446,11 @@ def cat_performance(ctx: Ctx, args, maxpts: float) -> dict:
     profs = ctx.cfg.get("performance", {}).get("profiles", {})
     prof = profs.get(args.profile) or profs.get("small") or {}
     rep = ctx.rel.report or {}
-    secs = args.wall_seconds if args.wall_seconds is not None else (rep.get("timing") or {}).get("seconds")
-    mem = args.peak_mb if args.peak_mb is not None else (rep.get("resources") or {}).get("peak_rss_mb")
+    secs = args.wall_seconds if args.wall_seconds is not None else _as_dict(rep.get("timing")).get("seconds")
+    mem = args.peak_mb if args.peak_mb is not None else _as_dict(rep.get("resources")).get("peak_rss_mb")
+    # A malformed report (a list, a string, NaN, Infinity) counts as not measured.
+    secs = secs if _finite_number(secs) else None
+    mem = mem if _finite_number(mem) else None
     rc = args.exit_code
     reliability = 1.0 if rc == 0 else (0.0 if rc is None or rc < 0 else 0.3)
     if isinstance(secs, (int, float)):
@@ -2856,8 +2870,8 @@ def _main(argv=None) -> int:
     ap.add_argument("--config", help="scoring.toml (default <kit>/scoring.toml)")
     ap.add_argument("--redteam-json", help="reuse a saved tools/redteam.py --json result")
     ap.add_argument("--exit-code", type=int, default=0, help="the pipeline's exit code (default 0)")
-    ap.add_argument("--wall-seconds", type=float, help="override report.json timing.seconds")
-    ap.add_argument("--peak-mb", type=float, help="override report.json resources.peak_rss_mb")
+    ap.add_argument("--wall-seconds", type=_finite_arg, help="override report.json timing.seconds")
+    ap.add_argument("--peak-mb", type=_finite_arg, help="override report.json resources.peak_rss_mb")
     ap.add_argument("--top", type=int, default=10, help="how many point losses to list")
     ap.add_argument("--make-baseline", choices=["passthrough", "redact", "redact-all"],
                     help="build a calibration baseline release instead of scoring")

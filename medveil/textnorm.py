@@ -151,8 +151,10 @@ def b64_encode_text(text: str) -> str:
 HEX_RUN = re.compile(r"(?<![0-9A-Fa-f])(?:[0-9A-Fa-f]{2}){8,}(?![0-9A-Fa-f])")
 
 
-_HEX_DIGITS_ONLY = re.compile(r"(?:3[0-9]){8,}")      # hex of ASCII digits only
+# hex of ASCII digits, spaces, "+" and "-" only ("+91 98765 43210", "98765-43210")
+_HEX_DIGITS_ONLY = re.compile(r"(?:3[0-9]|2[0bdBD]){8,}")
 _DIGITS_TEXT = re.compile(r"[\d +\-]{8,}")
+_EIGHT_DIGITS = re.compile(r"(?:\D*\d){8}")
 
 
 def hex_text(value: str) -> str | None:
@@ -168,7 +170,7 @@ def hex_text(value: str) -> str | None:
     except (ValueError, UnicodeDecodeError):
         return None
     if digits_only:
-        return txt if _DIGITS_TEXT.fullmatch(txt) else None
+        return txt if _DIGITS_TEXT.fullmatch(txt) and _EIGHT_DIGITS.match(txt) else None
     if not txt or not re.search(r"[A-Za-z\u0900-\u097F]{2}", txt):
         return None
     printable = sum(1 for c in txt if c.isprintable() or c in "\r\n\t")

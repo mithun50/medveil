@@ -131,6 +131,9 @@ def test_structured_dob_in_shift_mode_keeps_only_the_dates():
     sl = Slot(path=(0, 1), text=text, ftype="DOB", kind="value")
     out = replacement(Span(0, len(text), "DOB"), sl, _dob_ctx("shift"), structured=True)
     assert out == "21/04/1980", out
+    two = "12/03/1980 or 13/03/1980"       # one valid date out, never a joined list
+    sl2 = Slot(path=(0, 1), text=two, ftype="DOB", kind="value")
+    assert replacement(Span(0, len(two), "DOB"), sl2, _dob_ctx("shift"), structured=True) == "21/04/1980"
     assert replacement(Span(0, len(text), "DOB"), sl, _dob_ctx("suppress"), structured=True) == ""
 
 
@@ -145,10 +148,17 @@ def test_fhir_birthdate_with_spaces_is_dropped_not_left_blank():
     doc = Doc(rel="fhir/b.json", sha256="0")
     sniff_and_parse(doc, json.dumps(bundle).encode(), DEFAULTS)
     build_slots(doc, classify_header, classify_key)
+    from medveil.detect.engine import Knowledge, detect_slot
+    from medveil.rewrite import rewrite_record
     dob = [sl for r in doc.records for sl in r.slots if sl.ftype == "DOB"]
     assert dob, "birthDate must be typed as DOB for this test to mean anything"
-    for sl in dob:
-        sl.out = "  "            # what rewriting leaves when the date itself is suppressed
+    k = Knowledge()
+    k.finalize()
+    for rec in doc.records:              # the real path: detect, then rewrite with suppress
+        for sl in rec.slots:
+            detect_slot(sl, k, doc)
+        rewrite_record(rec, _dob_ctx("suppress"))
+    assert all(isinstance(sl.out, str) and not sl.out.strip() for sl in dob), [sl.out for sl in dob]
     assert "birthDate" not in serialize(doc)
 
 
@@ -159,3 +169,22 @@ def test_unknown_dob_mode_falls_back_to_suppress(tmp_path):
     assert load(p)["dob"]["mode"] == "suppress"
     p.write_text("dob:\n  mode: shift\n", encoding="utf-8")
     assert load(p)["dob"]["mode"] == "shift"
+
+
+
+def test_long_whitespace_before_a_code_does_not_hide_the_diagnosis():
+    rv, recs = _collect(["Diagnosis: Visceral leishmaniasis" + " " * 400 + "(B55.0)"])
+    assert rv.displays.get("B55.0"), "display lost behind the whitespace run"
+
+
+def test_rare_value_matching_worst_case_is_fast():
+    # Every variant's words occur in one 2 MB note, so the word prefilter cannot skip any.
+    import time
+    words = ["w%03d" % i for i in range(300)]
+    texts = ["Diagnosis: %s %s disease (A%02d.0)" % (words[i], words[i + 1], i % 99) for i in range(0, 298, 2)]
+    big = (" ".join(words) + " ") * (2_000_000 // 2400)
+    recs = [(Doc(rel=f"r{i}", sha256="0"), _rec(x)) for i, x in enumerate(texts + [big])]
+    rv = RareValues(2)
+    t0 = time.perf_counter()
+    rv.collect(recs)
+    assert time.perf_counter() - t0 < 5.0
