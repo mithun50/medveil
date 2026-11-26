@@ -154,7 +154,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 fallback below
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KIT = ROOT.parent / "Secret-Wards-ToolKit"
 
-sys.setrecursionlimit(max(sys.getrecursionlimit(), 10000))
 csv.field_size_limit(2 ** 31 - 1)
 
 # Fixed mixes that SCORING.md states but scoring.toml does not carry.
@@ -170,6 +169,21 @@ REPORT_COUNTS = ["files_total", "files_sanitized", "files_quarantined", "records
                  "identifiers_detected", "records_linked", "records_generalized",
                  "records_suppressed", "records_quarantined"]
 STATUSES = {"sanitized", "quarantined", "suppressed"}
+
+
+def _as_dict(x) -> dict:
+    return x if isinstance(x, dict) else {}
+
+
+def _reject_json_constant(name: str):
+    raise ValueError("JSON has no %s" % name)
+
+
+def _finite_json_float(s: str) -> float:
+    v = float(s)
+    if not math.isfinite(v):
+        raise ValueError("number out of range")
+    return v
 BOM = b"\xef\xbb\xbf"
 
 # ----------------------------------------------------------------------------
@@ -843,7 +857,8 @@ class Release:
         except (OSError, ValueError):
             self.report_error = "invalid JSON"
         rep = self.report or {}
-        self.entries = [e for e in (rep.get("files") or []) if isinstance(e, dict)]
+        files = rep.get("files")
+        self.entries = [e for e in files if isinstance(e, dict)] if isinstance(files, list) else []
         self.san = out_dir / "sanitized"
         self.san_files = {p.relative_to(self.san).as_posix() for p in walk_files(self.san)}
         self.by_sha = defaultdict(list)
@@ -881,6 +896,8 @@ class Release:
             lines = (out_dir / "records.jsonl").read_text(encoding="utf-8-sig").splitlines()
         except FileNotFoundError:
             lines, self.records_error = [], "missing"
+        except UnicodeDecodeError:
+            lines, self.records_error = [], "not UTF-8"
         except OSError:
             lines, self.records_error = [], "unreadable"
         for line in lines:
@@ -2144,7 +2161,7 @@ def format_ok(raw: bytes, fmt: str, delim: str):
             return False, "CSV does not parse"
     elif fmt in ("json", "fhir"):
         try:
-            json.loads(text)
+            json.loads(text, parse_constant=_reject_json_constant, parse_float=_finite_json_float)
         except (ValueError, RecursionError):
             return False, "JSON does not parse"
     elif fmt == "xml":
@@ -2323,7 +2340,8 @@ def cat_integrity(ctx: Ctx, side: dict, maxpts: float) -> dict:
         if is_copy:
             copy_rel.append(rel)
     silent = [rel for rel, f in ctx.files.items()
-              if not R.mapping.get(rel) and not R.declared_status(f.get("sha256", ""))]
+              if not R.mapping.get(rel)
+              and not R.declared_status(f.get("sha256", "")) & {"quarantined", "suppressed"}]
     n_in = len(ctx.files)
     q_parts = {"handled_safely": safe / len(either) if either else 1.0,
                "no_silent_drop": 1 - len(silent) / n_in if n_in else 1.0,
@@ -2343,8 +2361,8 @@ def cat_integrity(ctx: Ctx, side: dict, maxpts: float) -> dict:
             len(shas & listed) / len(shas) if shas else 1.0,
             sum(1 for k in REPORT_COUNTS if isinstance(counts.get(k), (int, float))) / len(REPORT_COUNTS),
             1.0 if isinstance(rep.get("entities"), dict) else 0.0,
-            1.0 if isinstance((rep.get("timing") or {}).get("seconds"), (int, float)) else 0.0,
-            1.0 if isinstance((rep.get("resources") or {}).get("peak_rss_mb"), (int, float)) else 0.0,
+            1.0 if isinstance(_as_dict(rep.get("timing")).get("seconds"), (int, float)) else 0.0,
+            1.0 if isinstance(_as_dict(rep.get("resources")).get("peak_rss_mb"), (int, float)) else 0.0,
         ]
         completeness = sum(checks) / len(checks)
         exported = sum(1 for rel in ctx.files if R.mapping.get(rel))
@@ -2809,6 +2827,18 @@ def make_baseline(kind: str, inp: Path, out: Path, truth_path) -> int:
 
 
 def main(argv=None) -> int:
+    # Deep JSON in releases needs a higher recursion limit. It is raised only while scoring and
+    # restored afterwards, so importing or calling this module (the tests do) does not change
+    # the limit for the rest of the process.
+    old = sys.getrecursionlimit()
+    sys.setrecursionlimit(max(old, 10000))
+    try:
+        return _main(argv)
+    finally:
+        sys.setrecursionlimit(old)
+
+
+def _main(argv=None) -> int:
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except (AttributeError, ValueError):

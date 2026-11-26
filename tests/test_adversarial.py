@@ -100,7 +100,8 @@ def test_tweak_file_survives_json_too_deep_to_parse():
     assert changed_any, "no seed tweaked the name, so the JSON check was never reached"
 
 
-@pytest.mark.skipif(not (KIT / "dev" / "input").is_dir(), reason="toolkit not next to the repo")
+@pytest.mark.skipif(not ((KIT / "dev" / "input").is_dir() and (KIT / "dev" / "truth" / "truth.json").is_file()),
+                    reason="toolkit not next to the repo")
 def test_generation_keeps_truth_consistent(tmp_path):
     rc = adv.generate(KIT.resolve(), tmp_path.resolve(), 3)
     assert rc == 0
@@ -111,13 +112,20 @@ def test_generation_keeps_truth_consistent(tmp_path):
     assert truth["hostile"], "hostile metadata missing"
 
     src_in = dest / "input"
-    # Entities keep the ORIGINAL clean surface; tweaked ones carry a tweak kind.
+    # Entities keep the ORIGINAL clean surface (the kit's); tweaked ones carry a tweak kind.
+    kit_files = json.loads((KIT / "dev" / "truth" / "truth.json").read_text(encoding="utf-8"))["files"]
     seen_tweak = False
     for rel, f in truth["files"].items():
         if f.get("category") == "hostile":
             continue
-        for u in f["units"].values():
-            for e in u["entities"]:
+        orig = kit_files.get(rel)
+        for uk, u in f["units"].items():
+            orig_ents = orig["units"][uk]["entities"] if orig else None
+            if orig_ents is not None:
+                assert len(orig_ents) == len(u["entities"]), (rel, uk)
+            for i, e in enumerate(u["entities"]):
+                if orig_ents is not None:
+                    assert e["surface"] == orig_ents[i]["surface"], (rel, uk, e["surface"])
                 if e.get("tweak"):
                     seen_tweak = True
                     assert e["tweak"] in set(adv.NAME_TWEAKS) | set(adv.DIGIT_TWEAKS) | set(adv.WRAP_KINDS)
@@ -128,14 +136,14 @@ def test_generation_keeps_truth_consistent(tmp_path):
     for rel, f in truth["files"].items():
         if f.get("category") in ("hostile",) or f.get("format") in ("pdf", "binary"):
             continue
+        if f.get("format") == "symlink":
+            continue
         p = src_in / rel
-        if not p.is_file():
-            continue
+        assert p.is_file(), "input file missing: %s" % rel
+        if f.get("category") == "malformed":
+            continue   # deliberately undecodable kit files (corrupt bytes); they carry no probes
         enc = f.get("encoding") or "utf-8"
-        try:
-            text = p.read_bytes().decode(enc)
-        except (UnicodeError, LookupError):
-            continue
+        text = p.read_bytes().decode(enc)   # a decode error fails the test instead of skipping
         hay = text + "\n" + "\n".join(dec for _, _, dec in adv.cg.b64_blobs(text))
         if f.get("format") in ("json", "fhir"):
             hay += "\n" + adv.cg.decoded_json_text(text)
@@ -151,3 +159,79 @@ def test_generation_keeps_truth_consistent(tmp_path):
         if truth["files"][rel].get("format") == "symlink":
             continue
         assert (src_in / rel).exists(), "missing hostile file %s" % rel
+
+
+# ---------------------------------------------------------------- review findings, PR #3
+
+def test_u_escape_wrapper_round_trips_non_bmp():
+    line = "Name: Rohit \U0001F600 Mehra"
+    blob = adv.wrap_line(line, "wrap_uXXXX")
+    assert json.loads('"' + blob[len("esc: "):] + '"') == line
+
+
+def test_take_phone_fallback_never_repeats():
+    used = set()
+    got = [adv.take_phone(iter(["9876543210"]), used) for _ in range(4)]
+    assert len(set(got)) == 4 and got[0] == "9876543210"
+
+
+def test_read_bytes_is_bounded_and_flags_long_files(tmp_path):
+    f = tmp_path / "big.txt"
+    f.write_bytes(b"a" * 100)
+    adv.TOO_LARGE.clear()
+    assert adv._read_bytes(f, limit=10) == b"a" * 10
+    assert adv.TOO_LARGE == [str(f)]
+    adv.TOO_LARGE.clear()
+    assert adv._read_bytes(f, limit=100) == b"a" * 100 and adv.TOO_LARGE == []
+
+
+def _mini_truth(tmp_path, hostile=None):
+    truth = {"files": {}, "hostile": hostile or {}}
+    p = tmp_path / "truth.json"
+    p.write_text(json.dumps(truth), encoding="utf-8")
+    return p
+
+
+def test_verify_fails_without_a_release(tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    assert adv.verify(out, _mini_truth(tmp_path), None) == 1
+
+
+def _release(tmp_path, text):
+    out = tmp_path / "out"
+    (out / "sanitized").mkdir(parents=True)
+    (out / "sanitized" / "a.txt").write_text(text, encoding="utf-8")
+    (out / "report.json").write_text(json.dumps({"files": []}), encoding="utf-8")
+    return out
+
+
+def test_verify_fails_when_symlink_target_pii_is_released(tmp_path):
+    ents = [{"type": "PATIENT_NAME", "surface": adv.OUTSIDE_NAME, "match": "name",
+             "tokens": [t.lower() for t in adv.OUTSIDE_NAME.split()]}]
+    hostile = {"hostile/link.txt": {"kind": "symlink_escape", "expect": "either", "target_pii": ents}}
+    truth = _mini_truth(tmp_path, hostile)
+    # the link itself is listed as quarantined; only the leaked target text should fail
+    rep = {"files": [{"input_sha256": None, "status": "quarantined"}]}
+    clean = _release(tmp_path, "nothing personal here")
+    (clean / "report.json").write_text(json.dumps(rep), encoding="utf-8")
+    truth_d = json.loads(truth.read_text(encoding="utf-8"))
+    truth_d["files"]["hostile/link.txt"] = {"sha256": None, "units": {}}
+    truth.write_text(json.dumps(truth_d), encoding="utf-8")
+    assert adv.verify(clean, truth, None) == 0
+    (clean / "sanitized" / "a.txt").write_text("leaked: " + adv.OUTSIDE_NAME, encoding="utf-8")
+    assert adv.verify(clean, truth, None) == 1
+
+
+def test_verify_fails_on_hostile_handling_mismatch(tmp_path):
+    truth = _mini_truth(tmp_path, {"hostile/x.json": {"kind": "json_nan", "expect": "quarantine"}})
+    truth_d = json.loads(truth.read_text(encoding="utf-8"))
+    truth_d["files"]["hostile/x.json"] = {"sha256": "abc", "units": {}}
+    truth.write_text(json.dumps(truth_d), encoding="utf-8")
+    out = _release(tmp_path, "ok")
+    (out / "report.json").write_text(json.dumps({"files": [{"input_sha256": "abc", "status": "sanitized"}]}),
+                                     encoding="utf-8")
+    assert adv.verify(out, truth, None) == 1
+    (out / "report.json").write_text(json.dumps({"files": [{"input_sha256": "abc", "status": "quarantined"}]}),
+                                     encoding="utf-8")
+    assert adv.verify(out, truth, None) == 0

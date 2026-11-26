@@ -283,3 +283,27 @@ def test_passthrough_calibration(kit, tmp_path):
     assert res["categories"]["detection"]["parts"]["recall"] == 0.0
     assert res["categories"]["utility"]["score"] == pytest.approx(1.0, abs=1e-3)
     assert -21.5 < res["total"] < -17.5          # SCORING.md anchor: -19.48
+
+
+# ---------------------------------------------------------------- review findings, PR #3
+
+def test_importing_the_scorecard_leaves_the_recursion_limit_alone():
+    # The limit used to be raised at import time, which leaked into the whole pytest session
+    # and hid a RecursionError that CI on Python 3.10 and 3.11 then hit.
+    assert sys.getrecursionlimit() < 10000
+
+
+@pytest.mark.parametrize("raw", [b'{"a": NaN}', b'{"a": Infinity}', b'{"a": -Infinity}', b'{"a": 1e400}'])
+def test_non_finite_json_is_not_valid_format(raw):
+    ok, why = sc.format_ok(raw, "json", ",")
+    assert not ok and "JSON" in why
+
+
+def test_release_with_bad_records_and_report_types_does_not_crash(tmp_path):
+    out = tmp_path / "rel"
+    (out / "sanitized").mkdir(parents=True)
+    (out / "records.jsonl").write_bytes(b'{"file": "a\xff"}\n')
+    (out / "report.json").write_text('{"files": 7, "timing": [], "resources": "x"}', encoding="utf-8")
+    R = sc.Release(out, {"files": {}})
+    assert R.records_error == "not UTF-8"
+    assert R.entries == []
