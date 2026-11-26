@@ -102,9 +102,9 @@ def decode_escapes(text: str, entities: bool = True) -> str:
         text = _NUM_ENT.sub(lambda m: html.unescape(m.group(0)), text)
         text = _NAMED_ENT.sub(lambda m: html.unescape(m.group(0)), text)
     if "%" in text and _PCT_ONE.search(text):
-        # URL-encoded tokens ("Name%3A%20Rohit%20Mehra", "Roh%69t") are decoded in place.
-        # Whitespace-delimited tokens keep this linear; a pattern with an unanchored prefix
-        # backtracks quadratically on long tokens.
+        # Each whitespace-delimited word holding a %XX escape is URL-decoded in place, for
+        # example a name written as Roh%69t. Working word by word keeps this linear; a pattern
+        # with an unanchored prefix backtracks quadratically on long words.
         text = _NONSPACE.sub(_decode_pct, text)
     return text
 
