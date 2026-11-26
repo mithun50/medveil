@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pytest
+
 from medveil.crypto import LETTERS, Keys
 from medveil.privacy import _aligned, plan_bands, shift_date
 from medveil.rare import RareValues, chapter
@@ -172,8 +174,9 @@ def test_unknown_dob_mode_falls_back_to_suppress(tmp_path):
 
 
 
-def test_long_whitespace_before_a_code_does_not_hide_the_diagnosis():
-    rv, recs = _collect(["Diagnosis: Visceral leishmaniasis" + " " * 400 + "(B55.0)"])
+@pytest.mark.parametrize("ws", [" ", "\u2028", "\u0085", "\u3000"])
+def test_long_whitespace_before_a_code_does_not_hide_the_diagnosis(ws):
+    rv, recs = _collect(["Diagnosis: Visceral leishmaniasis" + ws * 400 + "(B55.0)"])
     assert rv.displays.get("B55.0"), "display lost behind the whitespace run"
 
 

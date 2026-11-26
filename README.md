@@ -126,9 +126,10 @@ removed, Cyrillic and Greek homoglyphs folded, Latin diacritics stripped, every 
 to `-`, Indic, Arabic-Indic and full-width digits to ASCII, `\uXXXX`, HTML entities,
 %-encoding and base64 decoded. The scorer normalizes the same way, so a disguised name cannot
 slip through. Text longer than 32 KB is detected in chunks of about 4 KB, cut at whitespace.
-Each chunk is detected with up to 256 characters of context on each side, so a spaced phone
-number cut by the boundary is found whole and a label or a doctor's title ending the previous
-chunk still applies. Repeated chunks are detected once (the cache holds 4,096 distinct chunks). A run with no whitespace at all (a base64 blob) is never cut, so it can still be decoded;
+Each chunk is detected inside a window that adds up to 256 characters before it (cut at
+whitespace) and 256 after it (extended to the next whitespace), so a spaced phone number cut
+by the boundary is found whole and a label or a doctor's title ending the previous chunk still
+applies. Identical windows are detected once; the cache holds up to 4,096 of them. A run with no whitespace at all (a base64 blob) is never cut, so it can still be decoded;
 there the cost depends on the patterns staying linear on that run, which the 2 MB probes below
 check.
 

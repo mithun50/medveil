@@ -143,23 +143,27 @@ def _read_regular(p: Path, max_bytes: float, st: os.stat_result | None = None):
         if st is not None and (fst.st_dev, fst.st_ino) != (st.st_dev, st.st_ino):
             return b"", "unreadable", None
         limit = int(max_bytes)
-        buf = bytearray()
+        data = b""
         if fst.st_size <= limit:
             # Ask for the size fstat reported plus one byte (asking for `limit` would make
-            # Python allocate a buffer that large for every file); keep reading in 1 MB
-            # pieces only if the file grew, and stop just past the limit.
-            buf += fh.read(fst.st_size + 1)
-            while len(buf) > fst.st_size and len(buf) <= limit:
-                piece = fh.read(min(1 << 20, limit + 1 - len(buf)))
-                if not piece:
-                    break
-                buf += piece
-        if fst.st_size > limit or len(buf) > limit:
-            h = hashlib.sha256(buf)
+            # Python allocate a buffer that large for every file). The usual case is one
+            # read and one buffer; only a file that grew meanwhile is read on in 1 MB pieces,
+            # stopping just past the limit.
+            data = fh.read(fst.st_size + 1)
+            if len(data) > fst.st_size:
+                buf = bytearray(data)
+                while len(buf) <= limit:
+                    piece = fh.read(min(1 << 20, limit + 1 - len(buf)))
+                    if not piece:
+                        break
+                    buf += piece
+                data = bytes(buf)
+        if fst.st_size > limit or len(data) > limit:
+            h = hashlib.sha256(data)
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
             return b"", "too_large", h
-        return bytes(buf), "", None
+        return data, "", None
 
 
 def main(argv: list[str] | None = None) -> int:

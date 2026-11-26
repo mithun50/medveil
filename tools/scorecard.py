@@ -176,13 +176,19 @@ def _as_dict(x) -> dict:
 
 
 def _finite_number(x) -> bool:
-    return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+    """A usable measurement: a real number, finite and not negative."""
+    if not isinstance(x, (int, float)) or isinstance(x, bool):
+        return False
+    try:
+        return math.isfinite(x) and x >= 0
+    except OverflowError:          # an integer too large for a float
+        return False
 
 
 def _finite_arg(s: str) -> float:
     v = float(s)
-    if not math.isfinite(v):
-        raise argparse.ArgumentTypeError("must be a finite number, got %r" % s)
+    if not math.isfinite(v) or v < 0:
+        raise argparse.ArgumentTypeError("must be a finite, non-negative number, got %r" % s)
     return v
 
 

@@ -52,7 +52,7 @@ def _diag_with_code(text: str) -> list[tuple[str, str]]:
         # The whitespace run before the code is collapsed to one space, so a long run cannot
         # push the display out of the window and the window stays short.
         k = m.start()
-        while k > 0 and text[k - 1] in " \t\r\n":
+        while k > 0 and text[k - 1].isspace():
             k -= 1
         window = text[max(0, k - 256):k] + " " + m.group(0)
         dm = None
