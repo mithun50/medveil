@@ -197,8 +197,8 @@ class Toks:
 
 # Labels that introduce a name, with the role of that person.
 _LABELS = [
-    (re.compile(r"(?i)\b(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s+of\s+(?:the\s+)?patient|patient|naam|name|"
-                r"beneficiary(?:\s+name)?|report\s+of|rogi\s+ka\s+naam|mareez\s+ka\s+naam)\s*[:\-=]\s*"), "patient"),
+    (re.compile(r"(?i)\b(?:patient(?:'s)?\s*name|pt\.?\s*name|name\s+of\s+(?:the\s+)?patient|patient|pt|naam|name|"
+                r"beneficiary(?:\s+name)?|report\s+of|rogi(?:\s+ka\s+naam)?|mareez(?:\s+ka\s+naam)?|mariz)\s*[:\-=]\s*"), "patient"),
     (re.compile(r"(?i)\breport\s+of\s+"), "patient"),
     (re.compile(r"(?i)\b(?:attendant|guardian|relative|father(?:'s)?(?:\s+name)?|husband(?:'s)?(?:\s+name)?|"
                 r"mother(?:'s)?(?:\s+name)?|wife(?:'s)?(?:\s+name)?|spouse|nok|next\s+of\s+kin|informant|"
@@ -206,7 +206,7 @@ _LABELS = [
     (re.compile(r"(?i)\b(?:called\s+by|witnessed\s+by|raised\s+by|signed\s+by|brought\s+by|accompanied\s+by|"
                 r"informed\s+by|visited\s+by|submitted\s+by|reported\s+by|consent\s+(?:given|signed)\s+by|"
                 r"received\s+by|collected\s+by|handed\s+over\s+to)\s*[:\-=]?\s*"), "other"),
-    (re.compile(r"(?:मरीज़?\s*का\s*नाम|रोगी\s*का\s*नाम|नाम)\s*[:：\-]\s*"), "patient"),
+    (re.compile(r"(?:मरीज़?\s*का\s*नाम|रोगी\s*का\s*नाम|(?<!का\s)नाम|मरीज़?|रोगी|मरीज़ा)\s*[:：\-]\s*"), "patient"),
     (re.compile(r"(?:पिता\s*का\s*नाम|पति\s*का\s*नाम|माता\s*का\s*नाम|पत्नी\s*का\s*नाम|अभिभावक|परिचारक|"
                 r"पिता/पति\s*का\s*नाम)\s*[:：\-]\s*"), "relative"),
 ]

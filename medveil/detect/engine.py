@@ -86,9 +86,9 @@ class Shapes:
         if len(k) < 4 or sum(c.isdigit() for c in k) < 3:
             return
         self.vals[k] = raw
-        groups = re.findall(r"\d+", raw)
-        if groups and len(groups[-1]) >= 5:
-            self.cores.add(groups[-1])
+        groups = [g for g in re.findall(r"\d+", raw) if len(g) >= 5]
+        if groups:
+            self.cores.add(max(groups, key=len))
         sh = self.shape(raw)
         if sh:
             self.counts[sh] += 1
@@ -389,12 +389,13 @@ def detect_slot(sl: Slot, K: Knowledge, doc: Doc, file_level: bool = False) -> N
     if has_upper or ft == "ADDRESS" or ("near" in view.lower() or "opp" in view.lower()):
         spans.extend(find_address(view, prot, whole=(ft == "ADDRESS")))
     if file_level and has_upper:
-        spans.extend(_aggressive_names(view, prot))
+        spans.extend(_aggressive_names(view, prot, any(s.etype in ("MRN", "PHONE") for s in ids)))
     sl.spans = resolve(spans)
 
 
-def _aggressive_names(text: str, prot) -> list[Span]:
-    """File names, headers and keys: any known given name token is personal data."""
+def _aggressive_names(text: str, prot, has_id: bool = False) -> list[Span]:
+    """File names, headers and keys: a known given name, or any capitalised word sitting
+    next to an identifier ("HSP/0077 Sunaina"), is personal data."""
     out = []
     for m in WORD.finditer(text):
         w = m.group(0)
@@ -402,6 +403,8 @@ def _aggressive_names(text: str, prot) -> list[Span]:
             continue
         if is_stopword(w) or w.lower() in NAME_PREFIX:
             continue
-        if is_given(w) and not in_protected(prot, m.start(), m.end()):
+        if in_protected(prot, m.start(), m.end()):
+            continue
+        if is_given(w) or has_id:
             out.append(Span(m.start(), m.end(), "NAME", role="mention", conf=0.6, value=w, rule="file_given"))
     return out

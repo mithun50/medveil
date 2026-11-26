@@ -126,8 +126,8 @@ def overlaps_protected(prot, s: int, e: int, kinds=None) -> bool:
 # --------------------------------------------------------------------------- identifiers
 EMAIL = re.compile(r"(?<![\w.+\-])[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 ABHA_ADDR = re.compile(r"(?<![\w.])[A-Za-z0-9._]{3,}@(?:abdm|sbx|ndhm|abha)\b", re.I)
-ABHA = re.compile(r"(?<![\w\-/])\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
-AADHAAR = re.compile(r"(?<![\w\-/])\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
+ABHA = re.compile(r"(?<![\w\-/+])\d{2}[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
+AADHAAR = re.compile(r"(?<![\w\-/+])\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?![\w\-/])")
 AADHAAR_MASKED = re.compile(r"(?<![\w])(?:[Xx*•]{4}[\s\-]?[Xx*•]{4}[\s\-]?\d{4}|[Xx*]{8}\d{4})(?![\w])")
 PAN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{3}[PCHFATBLJGpchfatbljg][A-Za-z]\d{4}[A-Za-z](?![A-Za-z0-9])")
 INSURANCE = re.compile(r"(?<![A-Za-z0-9])(?:PMJAY|PM-JAY|ABPMJAY|AB-PMJAY)[\s\-/]?[A-Z]{0,3}[\s\-/]?\d{6,14}(?![A-Za-z0-9])"
@@ -138,7 +138,15 @@ ID_LABEL = re.compile(
     r"(?i)\b(UHID|MRN|MR\.?\s?No|MRD\s?No|Reg(?:istration|d)?\.?\s?No|Reg(?:istration)?\s?Number|IPD\s?No|IP\s?No|"
     r"CR\s?No|Hospital\s?No|Patient\s?ID|Pt\.?\s?ID|Adm(?:ission)?\.?\s?No|BHT\s?No|Case\s?No|OPD\s?Reg\.?\s?No)\.?"
     r"\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{2,30}[A-Za-z0-9])")
-ID_LABEL_DEVA = re.compile(r"(पंजीकरण\s*सं\.?|पंजीकरण\s*संख्या|आईपीडी\s*सं\.?|यूएचआईडी)\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{2,30}[A-Za-z0-9])")
+ID_LABEL_DEVA = re.compile(r"(पंजीकरण\s*सं\.?|पंजीकरण\s*संख्या|पंजीकरण\s*क्रमांक|आईपीडी\s*सं\.?|यूएचआईडी|भर्ती\s*(?:सं\.?|संख्या|क्रमांक|नं\.?)|"
+                           r"रजिस्ट्रेशन\s*(?:सं\.?|नं\.?|नंबर)|मरीज़?\s*(?:सं\.?|संख्या|क्रमांक|आईडी)|रोगी\s*(?:सं\.?|संख्या|क्रमांक))"
+                           r"\s*[:]?\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{2,30}[A-Za-z0-9])")
+# Any other "<label> No./Number/ID/क्रमांक: <alphanumeric with digits>" is treated as an identifier.
+GENERIC_ID_LABEL = re.compile(r"(?i)\b(?:[A-Za-z]{2,12}\.?\s){0,2}(?:No|Number|ID|Code|#)\.?\s*[:#\-]\s*([A-Za-z]{0,6}[/\-_.]?\d[A-Za-z0-9/\-_.]{3,28}[A-Za-z0-9])"
+                              r"|(?:[\u0900-\u097F]+\s){0,2}(?:क्रमांक|संख्या|सं\.|नंबर|आईडी)\s*[:]\s*([A-Za-z0-9][A-Za-z0-9/\-_.]{3,30})")
+_GENERIC_ID_SKIP = re.compile(r"(?i)\b(?:bill|invoice|receipt|sample|visit|order|test|lab|report|trip|ticket|package|"
+                              r"batch|lot|ward|bed|room|version|icd|loinc|phone|mobile|contact|mob|ph|tel|aadhaar|aadhar|"
+                              r"pan|abha|pin|zip|policy|claim|serial|sr|s|page)\b[^:\n]{0,14}$")
 INS_LABEL = re.compile(r"(?i)\b(?:Policy\s?No|PMJAY\s?ID|Card\s?No|Member\s?ID|Insurance\s?ID|Ayushman\s?(?:Card|ID))\.?\s*[:#\-]?\s*([A-Za-z0-9][A-Za-z0-9/\-]{4,30})")
 GENERIC_ID = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]{2,6}[/\-]?\d{2,4}[/\-]\d{4,8}(?![A-Za-z0-9])|(?<![A-Za-z0-9])[A-Za-z]{2,5}\d{6,9}(?![A-Za-z0-9])")
 
@@ -192,7 +200,12 @@ def find_ids(text: str, shapes=None) -> list[Span]:
     for m in AADHAAR.finditer(text):
         if _UNIT_AFTER.match(text[m.end():m.end() + 8]):
             continue
-        add(m.start(), m.end(), "AADHAAR", digits(m.group(0)), "aadhaar")
+        d = digits(m.group(0))
+        # "919334843599" right after a phone cue is a +91 mobile, not an Aadhaar
+        if d.startswith("91") and d[2] in "6789" and re.search(r"(?i)(?:mob|phone|ph|contact|call|tel|मोबाइल|फ़ोन)\W{0,12}$",
+                                                              text[max(0, m.start() - 20):m.start()]):
+            continue
+        add(m.start(), m.end(), "AADHAAR", d, "aadhaar")
     for m in AADHAAR_MASKED.finditer(text):
         add(m.start(), m.end(), "AADHAAR_MASKED", digits(m.group(0))[-4:], "aadhaar_masked")
     for m in PAN.finditer(text):
@@ -213,6 +226,13 @@ def find_ids(text: str, shapes=None) -> list[Span]:
         v = m.group(2)
         if sum(c.isdigit() for c in v) >= 3:
             add(m.start(2), m.end(2), "MRN", id_key(v), "id_label_deva")
+    for m in GENERIC_ID_LABEL.finditer(text):
+        g = 1 if m.group(1) else 2
+        v = m.group(g)
+        label = text[m.start():m.start(g)]
+        if _GENERIC_ID_SKIP.search(label.split(":")[0].rstrip(" #-")) or sum(c.isdigit() for c in v) < 4:
+            continue
+        add(m.start(g), m.end(g), "MRN", id_key(v), "generic_id_label")
     if shapes is not None:
         for rx in shapes.patterns():
             for m in rx.finditer(text):
@@ -229,6 +249,7 @@ AGE_PATTERNS = [
     re.compile(r"(?i)(?<![\d.\-/x])(\d{1,3})\s*(?:Y|Yr|Yrs|Year|Years|y/o|yo)\.?\s*(?:/|\s)\s*(?:M|F|Male|Female|O)\b"),
     re.compile(r"(?i)(?<![\d.\-/x])(\d{1,3})\s*(?:Yrs?|Years?)\s+old\b"),
     re.compile(r"(?<![\d.\-/x:])(\d{1,3})\s*/\s*(?:M|F|Male|Female)\b"),
+    re.compile(r"(?i)(?<![\d.\-/x])(\d{1,3})\s*(?:Y|Yrs?|Years?)\.?\s*,\s*(?:male|female|M|F)\b"),
     re.compile(r"(?:आयु|उम्र|उमर)\s*[:\-]?\s*(\d{1,3})(?!\d)"),
     re.compile(r"(?<![\d.\-/x])(\d{1,3})\s*(?:वर्ष|साल)\s*(?:/|,)?\s*(?:पुरुष|महिला|स्त्री)"),
 ]

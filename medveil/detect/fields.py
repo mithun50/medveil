@@ -46,10 +46,13 @@ _PARENT_OTHER = {"facility", "hospital", "lab", "organization", "organisation", 
                  "insurer", "payer", "scheme", "package", "procedure", "diagnosis", "condition", "valuecodeableconcept"}
 _PARENT_RELATIVE = {"guardian", "father", "husband", "relative", "attendant", "contact", "nok", "mother", "spouse",
                     "kin", "next_of_kin", "relatedperson", "parent", "wife", "son", "daughter", "emergency_contact"}
-_PARENT_DOCTOR = {"doctor", "practitioner", "referred_by", "consultant", "author", "performer", "requester",
-                  "asserter", "recorder", "attester", "physician", "prescriber", "participant", "individual"}
+_PARENT_DOCTOR = {"doctor", "practitioner", "referred_by", "consultant", "physician", "prescriber", "surgeon",
+                  "attending", "treating_doctor", "ref_doctor"}
+# FHIR roles that point at practitioners; only meaningful inside FHIR resources.
+_PARENT_DOCTOR_FHIR = {"author", "performer", "requester", "asserter", "recorder", "attester", "participant", "individual"}
 _PARENT_OTHER_PERSON = {"raised_by", "informant", "caller", "witness", "reporter", "visitor", "submitted_by",
-                        "created_by", "reported_by", "contact_person", "called_by"}
+                        "created_by", "reported_by", "contact_person", "called_by", "requester", "requested_by",
+                        "complainant", "applicant", "customer", "user", "member", "owner", "beneficiary"}
 _DATE_KEY = re.compile(r"(date|datetime|_on$|_at$|^on$|issued|^start$|^end$|timestamp|lastupdated|authoredon|"
                        r"collected|reported|registered|recorded|admitted|discharged|^time$|period)", re.I)
 
@@ -82,7 +85,7 @@ def classify_key(key: str, path: tuple, ctx) -> str | None:
         if kl == "display":
             if parent in ("subject", "patient", "beneficiary"):
                 return "NAME"
-            if parent in _PARENT_DOCTOR:
+            if parent in _PARENT_DOCTOR or parent in _PARENT_DOCTOR_FHIR:
                 return "DOCTOR"
             return None
         if kl == "line" or (kl in ("text",) and parent == "address"):
