@@ -11,11 +11,11 @@
   p { margin: 0.8mm 0; }
   ul { margin: 0.5mm 0 0.5mm 4.5mm; padding: 0; }
   li { margin: 0.4mm 0; }
-  table { border-collapse: collapse; width: 100%; margin: 1mm 0; font-size: 9.5pt; }
+  table { border-collapse: collapse; width: 100%; margin: 1mm 0; font-size: 10pt; }
   th, td { border: 1px solid #c9d3e6; padding: 0.6mm 1.4mm; text-align: left; vertical-align: top; }
   th { background: #eef2fa; }
   td.n, th.n { text-align: right; white-space: nowrap; }
-  .meta { font-size: 9.5pt; color: #333; margin-bottom: 1.5mm; }
+  .meta { font-size: 10pt; color: #333; margin-bottom: 1.5mm; }
   .pitch { background: #f4f7fc; border-left: 3px solid #1f3b73; padding: 1.2mm 2mm; margin: 1.5mm 0; }
   img.arch { width: 100%; margin: 1mm 0; }
   .two { display: flex; gap: 4mm; }
@@ -70,7 +70,7 @@ than 3 patients share the class (then state); PIN to 3 digits; diagnoses and pro
 patients published as their ICD-10 chapter; bands of patients sharing a diagnosis widened in runs of 3.</li>
 </ul>
 
-<h2>3. What makes it different</h2>
+<h2>3. USP: what makes it different</h2>
 <ul>
 <li><b>Context over memory:</b> canaries (names in no list) are caught by context; unseen ID formats are learned
 from the data at run time; unseen headers are typed by value profiling.</li>
@@ -105,14 +105,12 @@ run on the adversarial set) was fixed at its root, not by adding names. Our re-i
 <tr><td>State for everyone</td><td class="n">0.046</td><td class="n">0%</td><td class="n">19.5%</td><td class="n">97.1%</td><td class="n">97.00</td></tr>
 </table>
 <p><b>Why these settings.</b> On the practice registry, gender + 5-year band + district left 20 of 48 patients unique;
-adaptive 10/20-year bands leave 5. A truthful DOB would give the birth year and undo the bands, so it is suppressed
-(DOB is a small part of the utility score). Per-patient shifts defeat global-shift recovery (our attacker recovers 0
-days) and keep every interval and stay length exact. We keep the district for most patients because public-health
-research needs it, and give it up only where the class is rare; "state for everyone" buys nothing more. Eponym
-diagnoses stay exact: they are scored meaning-trap values. Condition-aware bands halved the targeted attack:
+adaptive 10/20-year bands leave 5. A truthful DOB would undo the bands, so it is suppressed. Per-patient shifts
+defeat global-shift recovery (our attacker recovers 0 days) and keep every interval and stay length exact. We keep the district for most patients because public-health
+research needs it, and give it up only where the class is rare. Eponym diagnoses stay exact (meaning traps). Condition-aware bands halved the targeted attack:
 before them, "Tuberculosis of lung" (6 patients) left one profile consistent with a known patient. The rest of it
 is mostly an exact length of stay of a rare length.
-Direct exposure (A1) and pseudonym inversion (A6) are 0%; across two releases no pseudonym and 4.3% of dates stay the same (A7).</p>
+A1 direct exposure and A6 pseudonym inversion are 0%; A7: no pseudonym and 4.3% of dates repeat across releases.</p>
 <p><b>Speed.</b> Practice data: 2.2 s and 50 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
 43-48 s and 205 MB on a laptop (was 105 s: linking no longer compares everyone who shares a surname); the
 227-file adversarial set: 33 s and 344 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
