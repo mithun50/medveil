@@ -98,11 +98,11 @@ run on the adversarial set) was fixed at its root, not by adding names. Our re-i
 
 <table>
 <tr><th>Policy (practice registry, our attacker)</th><th class="n">Attack risk</th><th class="n">A4 re-id</th><th class="n">A5 targeted</th><th class="n">Values kept</th><th class="n">Est. total</th></tr>
-<tr><td>District kept everywhere</td><td class="n">0.171</td><td class="n">22.9%</td><td class="n">54.1%</td><td class="n">98.8%</td><td class="n">94.65</td></tr>
-<tr><td>State if (gender, band, district) has &lt; 3 patients</td><td class="n">0.101</td><td class="n">2.1%</td><td class="n">43.0%</td><td class="n">97.8%</td><td class="n">95.96</td></tr>
-<tr><td><b>+ condition-aware bands, runs of 3 (chosen)</b></td><td class="n"><b>0.051</b></td><td class="n"><b>0%</b></td><td class="n"><b>21.6%</b></td><td class="n"><b>97.8%</b></td><td class="n"><b>96.99</b></td></tr>
-<tr><td>Same, rare diagnoses kept exact</td><td class="n">0.066</td><td class="n">0%</td><td class="n">28.9%</td><td class="n">99.0%</td><td class="n">96.91</td></tr>
-<tr><td>State for everyone</td><td class="n">0.046</td><td class="n">0%</td><td class="n">19.5%</td><td class="n">97.1%</td><td class="n">97.00</td></tr>
+<tr><td>District kept everywhere</td><td class="n">0.176</td><td class="n">25.0%</td><td class="n">54.1%</td><td class="n">98.8%</td><td class="n">94.54</td></tr>
+<tr><td>State if (gender, band, district) has &lt; 3 patients</td><td class="n">0.101</td><td class="n">2.1%</td><td class="n">43.0%</td><td class="n">97.7%</td><td class="n">95.96</td></tr>
+<tr><td><b>+ condition-aware bands, runs of 3 (chosen)</b></td><td class="n"><b>0.051</b></td><td class="n"><b>0%</b></td><td class="n"><b>21.6%</b></td><td class="n"><b>97.7%</b></td><td class="n"><b>96.99</b></td></tr>
+<tr><td>Same, rare diagnoses kept exact</td><td class="n">0.066</td><td class="n">0%</td><td class="n">28.9%</td><td class="n">98.9%</td><td class="n">96.91</td></tr>
+<tr><td>State for everyone</td><td class="n">0.046</td><td class="n">0%</td><td class="n">19.5%</td><td class="n">96.9%</td><td class="n">97.00</td></tr>
 </table>
 <p><b>Why these settings.</b> On the practice registry, gender + 5-year band + district left 20 of 48 patients unique;
 adaptive 10/20-year bands leave 5. A truthful DOB would undo the bands, so it is suppressed. Per-patient shifts
@@ -112,8 +112,8 @@ before them, "Tuberculosis of lung" (6 patients) left one profile consistent wit
 is mostly an exact length of stay of a rare length.
 A1 direct exposure and A6 pseudonym inversion are 0%; A7: no pseudonym and 4.3% of dates repeat across releases.</p>
 <p><b>Speed.</b> Practice data: 2.2 s and 50 MB peak on the Linux CI runner; 10&times; the practice data (2,000 files):
-43-48 s and 205 MB on a laptop (was 105 s: linking no longer compares everyone who shares a surname); the
-227-file adversarial set: 33 s and 344 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
+35-52 s and 205 MB on a laptop (was 105 s: linking no longer compares everyone who shares a surname); the
+227-file adversarial set: 29 s and 345 MB. Two runs with one secret are byte-identical; another secret changes every pseudonym and date.</p>
 
 <h2>5. Security design (assume the server is breached)</h2>
 <div class="two"><div><ul>

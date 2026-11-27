@@ -80,7 +80,7 @@ Development:
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest -q                                             # 332 tests
+python -m pytest -q                                             # 349 tests
 python tools/ci_gate.py --input ../Secret-Wards-ToolKit/dev/input --truth ../Secret-Wards-ToolKit/dev/truth/truth.json
 python tools/chaos_gen.py --kit ../Secret-Wards-ToolKit --out chaos --seed 7
 python tools/adversarial_gen.py --kit ../Secret-Wards-ToolKit --out adv --seed 3
@@ -279,12 +279,12 @@ Result: 0 of 3,245 PII mentions and 0 of 8 canaries survive.
 | JSON with `NaN` or `Infinity` | quarantined (`malformed_json`) |
 | symlink pointing outside the input | quarantined (`symlink`): never parsed, copied or stored; a regular target is read only to hash it |
 | CSV formula injection, duplicate JSON keys, a 100,000-key object, UTF-16 without BOM, mixed encodings, a bidi file name | sanitized normally |
-| notes of up to 2 MB made of one repeated character, label, title word, base64 or hex alphabet | sanitized; each takes at most 5.4 s on its own, startup included |
+| notes of up to 2 MB made of one repeated character, label, title word, base64 or hex alphabet | sanitized; each takes at most about 6 s on its own, startup included |
 
-The whole adversarial set (227 files) runs in 33 s with a 344 MB peak on a laptop, down from
+The whole adversarial set (227 files) runs in about 30 s with a 345 MB peak on a laptop, down from
 158 s and 616 MB before chunked detection.
 
-Scale: 10 chaos sets together (2,000 files, 8,160 records) run in 43 to 48 s with a 205 MB peak
+Scale: 10 chaos sets together (2,000 files, 8,160 records) run in 35 to 52 s with a 205 MB peak
 (was 105 s). Linking used to compare every pair of patients sharing a surname; candidates are
 now indexed by the clue that could link them (a shared DOB, relatives or villages), with
 byte-identical output, so the run time grows about linearly with the input.
@@ -297,9 +297,9 @@ headline by about 0.01).
 
 | Policy | Est. attack risk | A5 targeted | Utility (of 20) | Est. total (of 100) |
 |---|---:|---:|---:|---:|
-| district kept everywhere (no state fallback) | 0.171 | 0.541 | 18.96 | 94.65 |
+| district kept everywhere (no state fallback) | 0.176 | 0.541 | 18.96 | 94.54 |
 | state fallback at k=3, no condition-aware bands (shipped before) | 0.101 | 0.430 | 18.51 | 95.96 |
-| state fallback at k=2 | 0.077 | 0.237 | 18.61 | 96.66 |
+| state fallback at k=2 | 0.081 | 0.237 | 18.61 | 96.56 |
 | condition-aware bands with runs of 2 | 0.076 | 0.336 | 18.31 | 96.40 |
 | **state fallback at k=3, condition-aware bands with runs of 3 (chosen)** | **0.051** | **0.216** | **18.29** | **96.99** |
 | same, no rare-value generalization | 0.066 | 0.289 | 18.57 | 96.91 |
