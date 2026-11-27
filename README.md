@@ -32,6 +32,25 @@ Our estimate of the official score on the practice data is **96.98 of 100**
 gives -19.74 for passthrough (official -19.48) and 22.61 for redact-all (official 22.75). The
 starter skeleton, for comparison, leaks 84.1% of personal data and links nobody.
 
+**Project Brief (2 pages):** [`docs/brief.pdf`](docs/brief.pdf), built from
+[`docs/brief/brief.html`](docs/brief/brief.html).
+
+### Submission checklist (Track 3)
+
+| Requirement | Where / result |
+|---|---|
+| public repository | https://github.com/mithun50/medveil |
+| `raksha.toml` (team name, setup, run) | repo root |
+| `requirements.txt`, `README.md`, `config/policy.yaml`, `main.py` | repo root |
+| 2-page brief: architecture, USP, privacy-utility trade-off, limitations | `docs/brief.pdf`, sections 1, 3, 4 and 6 |
+| output `sanitized/`, `report.json`, `records.jsonl` (plus optional encrypted `quarantine/`) | `validate_output.py --input dev/input --output my_output/`: `CONTRACT OK` |
+| pre-submit check | `check_submission.py --repo . --run`: `READY TO SUBMIT` |
+| offline | no network code; `socket.connect`, `create_connection` and `getaddrinfo` raise during the run |
+| 2 CPUs, 4 GB, 15 min | one process, one thread; 10x the practice data (2,000 files) pinned to 2 CPUs: 52 s, 205 MB peak |
+| no LLM or model above 50M parameters | no model at all; runtime imports are the standard library, `cryptography` and `PyYAML` |
+| same input and secret give identical output | checked by `check_submission.py` and by CI on every push |
+| own work | detection, linking and privacy logic are ours (`medveil/`); the starter was read for the output contract only |
+
 ---
 
 ## Setup and run
